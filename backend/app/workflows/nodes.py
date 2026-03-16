@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import CSVLoader, PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.llm import get_llm
 from app.workflows.state import WorkflowState
