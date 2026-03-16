@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.database import engine
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -22,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Handle startup and shutdown events."""
     logger.info("DocForge starting up")
     yield
+    await engine.dispose()
     logger.info("DocForge shutting down")
 
 

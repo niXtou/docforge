@@ -18,9 +18,10 @@ class SchemaCreate(BaseModel):
 class ExtractionRequest(BaseModel):
     """Payload for starting a document extraction job."""
 
-    schema_id: int = Field(..., description="ID of the extraction schema to use")
+    schema_id: int = Field(..., gt=0, description="ID of the extraction schema to use")
     model: str = Field(
         default="anthropic/claude-sonnet-4-20250514",
+        min_length=1,
         description="OpenRouter model string",
     )
     api_key: str | None = Field(
