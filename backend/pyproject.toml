@@ -64,6 +64,13 @@ pythonVersion = "3.12"
 typeCheckingMode = "strict"
 venvPath = "."
 venv = ".venv"
+# langgraph / langchain ship no type stubs; suppress cascading unknown-type noise
+reportMissingTypeStubs = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

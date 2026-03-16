@@ -12,7 +12,9 @@ class SchemaCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Schema name")
     description: str = Field(default="", description="Human-readable description")
-    json_schema: dict = Field(..., description="JSON Schema defining the extraction target")
+    json_schema: dict[str, object] = Field(
+        ..., description="JSON Schema defining the extraction target"
+    )
 
 
 class ExtractionRequest(BaseModel):
@@ -39,7 +41,7 @@ class SchemaResponse(BaseModel):
     id: int
     name: str
     description: str
-    json_schema: dict
+    json_schema: dict[str, object]
     is_builtin: bool
     created_at: datetime
 
@@ -62,7 +64,7 @@ class ExtractionResult(BaseModel):
 
     job_id: str
     status: str
-    data: dict | None
+    data: dict[str, object] | None
     validation_passed: bool
     retries_used: int
     model_used: str
@@ -82,4 +84,4 @@ class StreamEvent(BaseModel):
     node: str | None = None
     message: str
     timestamp: datetime
-    data: dict | None = None
+    data: dict[str, object] | None = None

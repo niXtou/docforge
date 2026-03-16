@@ -1,6 +1,10 @@
 """Tests for the LangGraph extraction workflow."""
 
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+from pytest import MonkeyPatch
 
 from app.workflows.graph import compiled_graph
 from app.workflows.state import WorkflowState
@@ -16,7 +20,7 @@ INVOICE_SCHEMA = {
 }
 
 
-async def test_graph_happy_path(tmp_path, monkeypatch):
+async def test_graph_happy_path(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Graph should complete successfully when LLM returns valid data."""
     doc = tmp_path / "invoice.txt"
     doc.write_text("Invoice #001\nTotal: $100\nItems: widget")
@@ -33,14 +37,14 @@ async def test_graph_happy_path(tmp_path, monkeypatch):
         file_path=str(doc),
         schema_definition=INVOICE_SCHEMA,
     )
-    result = await compiled_graph.ainvoke(state.model_dump())
+    result = await compiled_graph.ainvoke(state)
 
     assert result["final_result"] is not None
     assert result["status"] == "completed"
     assert result["retry_count"] == 0
 
 
-async def test_retry_loop_fires(tmp_path, monkeypatch):
+async def test_retry_loop_fires(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Graph should retry extraction when first result fails validation."""
     doc = tmp_path / "invoice.txt"
     doc.write_text("Invoice data")
@@ -51,7 +55,7 @@ async def test_retry_loop_fires(tmp_path, monkeypatch):
 
     call_count = 0
 
-    async def fake_ainvoke(prompt):
+    async def fake_ainvoke(prompt: Any) -> dict[str, Any]:
         nonlocal call_count
         call_count += 1
         return invalid_result if call_count == 1 else valid_result
@@ -67,13 +71,13 @@ async def test_retry_loop_fires(tmp_path, monkeypatch):
         file_path=str(doc),
         schema_definition=INVOICE_SCHEMA,
     )
-    result = await compiled_graph.ainvoke(state.model_dump())
+    result = await compiled_graph.ainvoke(state)
 
     assert result["retry_count"] == 1
     assert result["status"] == "completed"
 
 
-async def test_max_retries_graceful(tmp_path, monkeypatch):
+async def test_max_retries_graceful(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Graph should complete with errors (not raise) when max retries are exhausted."""
     doc = tmp_path / "invoice.txt"
     doc.write_text("Invoice data")
@@ -93,7 +97,7 @@ async def test_max_retries_graceful(tmp_path, monkeypatch):
         schema_definition=INVOICE_SCHEMA,
         max_retries=2,  # lower max for faster test
     )
-    result = await compiled_graph.ainvoke(state.model_dump())
+    result = await compiled_graph.ainvoke(state)
 
     # retry_count is incremented in validate_extraction each time validation fails.
     # With max_retries=2:
