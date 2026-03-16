@@ -1,17 +1,15 @@
 """API endpoint tests."""
 
-import pytest
 from httpx import AsyncClient
 
 
-@pytest.mark.asyncio
 async def test_health_returns_ok(client: AsyncClient) -> None:
     """Health endpoint should return 200 with status field."""
     response = await client.get("/api/health")
     assert response.status_code == 200
     body = response.json()
-    assert "status" in body
-    assert "version" in body
+    assert body["status"] == "ok"
+    assert body["version"] == "0.1.0"
 
 
 async def test_health_db_error(client: AsyncClient) -> None:
@@ -39,11 +37,3 @@ async def test_health_db_error(client: AsyncClient) -> None:
         assert body["status"] == "error"
     finally:
         app.dependency_overrides.pop(get_db, None)
-        # Restore the test override from conftest
-        from tests.conftest import TestSessionLocal
-
-        async def restore_override():
-            async with TestSessionLocal() as session:
-                yield session
-
-        app.dependency_overrides[get_db] = restore_override
