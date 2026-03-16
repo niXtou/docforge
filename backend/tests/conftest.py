@@ -1,6 +1,6 @@
 """Pytest fixtures: async DB, mock LLM, test client."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -38,7 +38,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture(autouse=True)
-def override_db() -> AsyncGenerator[None, None]:
+def override_db() -> Generator[None, None, None]:
     """Override get_db dependency to use in-memory SQLite."""
 
     async def _override() -> AsyncGenerator[AsyncSession, None]:
