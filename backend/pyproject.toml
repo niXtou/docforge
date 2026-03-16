@@ -45,6 +45,7 @@ dev = [
     "ruff>=0.6.0",
     "pyright>=1.1.380",
     "pre-commit>=3.8.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [tool.ruff]
@@ -67,8 +68,3 @@ venv = ".venv"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "aiosqlite>=0.22.1",
-]
