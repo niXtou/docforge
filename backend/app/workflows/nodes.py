@@ -1,5 +1,6 @@
 """Individual LangGraph node functions."""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -31,7 +32,10 @@ async def parse_document(state: WorkflowState) -> dict[str, Any]:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    docs = loader.load()
+    try:
+        docs = await asyncio.to_thread(loader.load)
+    except OSError as e:
+        raise FileNotFoundError(f"Could not read file {state.file_path}: {e}") from e
     text = "\n\n".join(doc.page_content for doc in docs)
 
     logger.info("Parsed %d document(s) from %s file", len(docs), ext)
@@ -69,7 +73,7 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
     chain = llm.with_structured_output(state.schema_definition)
 
     results: list[dict[str, Any]] = []
-    for chunk in state.chunks:
+    for i, chunk in enumerate(state.chunks):
         base_prompt = (
             f"Extract data matching this schema: {json.dumps(state.schema_definition)}\n\n"
             f"Document content:\n{chunk}"
@@ -82,14 +86,19 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         else:
             prompt_str = base_prompt
 
-        result = await chain.ainvoke(prompt_str)
+        try:
+            result = await chain.ainvoke(prompt_str)
+        except Exception as e:
+            logger.warning("LLM call failed for chunk %d: %s", i, e)
+            results.append({})
+            continue
 
         if isinstance(result, dict):
             result_dict: dict[str, Any] = result
         else:
             # Pydantic model or other structured output
             try:
-                result_dict = result.dict()  # type: ignore[union-attr]
+                result_dict = result.model_dump()  # type: ignore[union-attr]
             except AttributeError:
                 result_dict = dict(result)  # type: ignore[call-overload]
 
@@ -97,6 +106,25 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         logger.debug("Extracted chunk result: %s", list(result_dict.keys()))
 
     return {"chunk_extractions": results}
+
+
+def _merge_chunks(
+    chunk_extractions: list[dict[str, Any]],
+    properties: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge per-chunk extraction dicts respecting array vs scalar field types."""
+    merged: dict[str, Any] = {}
+    for extraction in chunk_extractions:
+        for field, value in extraction.items():
+            if properties.get(field, {}).get("type") == "array":
+                existing = merged.get(field, [])
+                if isinstance(existing, list) and isinstance(value, list):
+                    merged[field] = existing + value
+                else:
+                    merged[field] = value
+            else:
+                merged[field] = value
+    return merged
 
 
 async def validate_extraction(state: WorkflowState) -> dict[str, Any]:
@@ -107,23 +135,8 @@ async def validate_extraction(state: WorkflowState) -> dict[str, Any]:
     updated retry state — callers should route back to extraction when errors
     are present and retries remain.
     """
-    # Inline merge to validate the combined result
-    merged: dict[str, Any] = {}
     properties: dict[str, Any] = state.schema_definition.get("properties", {})
-    for extraction in state.chunk_extractions:
-        for field, field_schema in properties.items():
-            value = extraction.get(field)
-            if value is None:
-                continue
-            field_type = field_schema.get("type", "")
-            if field_type == "array":
-                existing = merged.get(field, [])
-                if isinstance(existing, list) and isinstance(value, list):
-                    merged[field] = existing + value
-                else:
-                    merged[field] = value
-            else:
-                merged[field] = value
+    merged = _merge_chunks(state.chunk_extractions, properties)
 
     required_fields: list[str] = state.schema_definition.get("required", [])
     errors: list[str] = []
@@ -148,22 +161,7 @@ async def merge_extractions(state: WorkflowState) -> dict[str, Any]:
     The final status reflects whether validation was clean.
     """
     properties: dict[str, Any] = state.schema_definition.get("properties", {})
-    merged: dict[str, Any] = {}
-
-    for extraction in state.chunk_extractions:
-        for field, field_schema in properties.items():
-            value = extraction.get(field)
-            if value is None:
-                continue
-            field_type = field_schema.get("type", "")
-            if field_type == "array":
-                existing = merged.get(field, [])
-                if isinstance(existing, list) and isinstance(value, list):
-                    merged[field] = existing + value
-                else:
-                    merged[field] = value
-            else:
-                merged[field] = value
+    merged = _merge_chunks(state.chunk_extractions, properties)
 
     status = "completed" if not state.last_validation_errors else "completed_with_errors"
     logger.info("Merge complete — status: %s", status)
