@@ -29,4 +29,4 @@ def test_workflow_state_defaults():
     assert state.max_retries == 3
     assert state.chunks == []
     assert state.final_result is None
-    assert state.model == "anthropic/claude-sonnet-4-20250514"
+    assert state.model == "google/gemini-2.0-flash"
