@@ -1,4 +1,42 @@
-"""Extraction service — orchestrates DB job lifecycle and LangGraph workflow."""
+"""Extraction service — orchestrates DB job lifecycle and LangGraph workflow.
+
+THIS IS THE GLUE LAYER
+───────────────────────
+Route handlers (app/api/documents.py) receive HTTP requests and validate
+input. The LangGraph workflow (app/workflows/) does the AI processing.
+This service sits between them: it manages the database job record and
+hands off to the graph.
+
+JOB LIFECYCLE
+──────────────
+  Route handler creates job_id (UUID) and calls run_extraction()
+       │
+       ▼
+  [DB] Insert ExtractionJob with status="pending"
+       │
+       ▼
+  [DB] Update status → "processing"
+       │
+       ▼
+  [Graph] compiled_graph.ainvoke(state) — runs parse→chunk→extract→validate→merge
+       │
+       ▼
+  [DB] Update job with results, status="completed" (or "failed")
+       │
+       ▼
+  Return ExtractionResult to the route handler
+
+FLUSH VS COMMIT
+────────────────
+`db.flush()` sends SQL to Postgres but does NOT commit the transaction.
+The row is visible to the current session (so we can update it), but no
+other session can see it yet. This lets us write "pending" and then
+immediately update to "processing" within the same transaction.
+
+`db.commit()` finalises all changes and makes them visible to other sessions.
+We commit once at the end (success) or once in the except block (failure),
+never mid-workflow.
+"""
 
 import time
 from datetime import UTC, datetime
@@ -36,7 +74,8 @@ async def run_extraction(
     Returns:
         ExtractionResult with all job metadata.
     """
-    # 1. Create the job record
+    # 1. Insert the job record as "pending" so it's immediately visible to
+    #    status-polling endpoints, even before processing starts.
     job = ExtractionJob(
         id=job_id,
         schema_id=schema.id,
@@ -46,9 +85,10 @@ async def run_extraction(
         model_used=model,
     )
     db.add(job)
-    await db.flush()
+    await db.flush()  # write to DB without committing — see module docstring
 
-    # 2. Build initial workflow state
+    # 2. Build the initial state that the workflow graph will use.
+    #    schema.json_schema is the JSON Schema dict that tells the LLM what to extract.
     state = WorkflowState(
         document_id=job_id,
         file_path=file_path,
@@ -58,17 +98,20 @@ async def run_extraction(
         api_key=api_key,
     )
 
-    # 3. Update status to processing
+    # 3. Mark as processing before handing off to the graph
     job.status = "processing"
     await db.flush()
 
-    # 4. Run the graph
+    # 4. Run the LangGraph workflow.
+    #    state.model_dump() converts the Pydantic model to a plain dict — LangGraph
+    #    requires this format and reconstructs a typed WorkflowState internally.
     time_start = time.monotonic()
     try:
         result_state: dict = await compiled_graph.ainvoke(state.model_dump())  # type: ignore[assignment]
 
         elapsed_ms = int((time.monotonic() - time_start) * 1000)
 
+        # Write all results from the final WorkflowState back into the DB record
         job.status = result_state.get("status", "completed")
         job.result_data = result_state.get("final_result")
         job.validation_passed = not bool(result_state.get("last_validation_errors"))
@@ -77,9 +120,11 @@ async def run_extraction(
         job.chunks_processed = len(result_state.get("chunks", []))
         job.completed_at = datetime.now(tz=UTC)
 
-        await db.commit()
+        await db.commit()  # persist everything in one transaction
 
     except Exception as e:
+        # If anything in the graph raised, mark the job as failed and re-raise
+        # so the route handler can return an appropriate HTTP error.
         job.status = "failed"
         job.error_message = str(e)
         await db.commit()

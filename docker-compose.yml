@@ -1,45 +1,68 @@
+# docker-compose.yml — local development stack for DocForge
+#
+# Three services run together:
+#   backend  — the FastAPI app (Python)
+#   db       — PostgreSQL (persistent document storage)
+#   redis    — Redis (job queuing and caching, used in later stages)
+#
+# Quick start:
+#   docker compose up --build
+#
+# The backend will not start until both db and redis pass their healthchecks,
+# preventing "connection refused" errors on startup.
+
 services:
   backend:
     build:
-      context: ./backend
+      context: ./backend      # directory containing the Dockerfile
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
-    env_file: .env
+      - "8000:8000"           # host:container — visit http://localhost:8000/docs
+    env_file: .env            # load secrets from your local .env (copy from .env.example)
     environment:
+      # These override .env values and use Docker's internal service hostnames
+      # (e.g. "db" resolves to the postgres container, NOT localhost)
       DATABASE_URL: postgresql+asyncpg://docforge_user:password@db:5432/docforge_db
       REDIS_URL: redis://redis:6379/0
       DEBUG: "true"
     depends_on:
       db:
-        condition: service_healthy
+        condition: service_healthy   # wait for postgres to accept connections
       redis:
-        condition: service_healthy
+        condition: service_healthy   # wait for redis to respond to PING
     volumes:
-      - ./backend/app:/app/app  # hot reload
+      # Mount the source code into the container so code changes take effect
+      # immediately without rebuilding the image (hot reload).
+      # Only the app/ directory is mounted — the venv stays inside the container.
+      - ./backend/app:/app/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # --reload watches for file changes and restarts the server automatically.
+    # In production (Dockerfile CMD) --reload is omitted and --workers is used instead.
 
   db:
-    image: postgres:15-alpine
+    image: postgres:15-alpine   # alpine = smaller image, same Postgres
     volumes:
+      # Named volume — data survives `docker compose down` (but not `down -v`)
       - docforge_pgdata:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: docforge_db
       POSTGRES_USER: docforge_user
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: password   # change this in production via .env
     healthcheck:
+      # pg_isready exits 0 when Postgres is ready to accept connections
       test: ["CMD-SHELL", "pg_isready -U docforge_user -d docforge_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 10s    # check every 10 seconds
+      timeout: 5s      # fail the check if it takes longer than 5 seconds
+      retries: 5       # mark unhealthy after 5 consecutive failures
     ports:
-      - "5432:5432"
+      - "5432:5432"    # expose to host so you can connect with psql/pgAdmin
 
   redis:
     image: redis:7-alpine
     volumes:
-      - docforge_redisdata:/data
+      - docforge_redisdata:/data   # persist Redis data across restarts
     healthcheck:
+      # redis-cli ping returns "PONG" when Redis is ready
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
@@ -47,6 +70,8 @@ services:
     ports:
       - "6379:6379"
 
+# Named volumes are managed by Docker and persist across container restarts.
+# To wipe all data and start fresh: docker compose down -v
 volumes:
   docforge_pgdata:
   docforge_redisdata:

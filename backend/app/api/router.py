@@ -1,4 +1,17 @@
-"""Main API router — mounts all sub-routers."""
+"""Main API router — mounts all sub-routers under /api.
+
+ROUTING STRUCTURE
+──────────────────
+  /api/health        — liveness and DB connectivity check (this stage)
+  /api/schemas       — CRUD for extraction schemas         (Stage 3)
+  /api/extract       — document upload and job management  (Stage 3)
+
+Routes are added incrementally as each stage is implemented. The TODOs below
+act as placeholders so the final URL layout is visible from day one.
+
+Each sub-router lives in its own file (health.py, schemas.py, documents.py)
+so endpoints stay focused and easy to find.
+"""
 
 from fastapi import APIRouter
 
