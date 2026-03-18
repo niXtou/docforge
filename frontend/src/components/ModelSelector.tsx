@@ -9,10 +9,11 @@ interface Props {
 export function ModelSelector({ value, onChange, disabled = false }: Props) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-zinc-300">
+      <label htmlFor="model-select" className="block text-sm font-medium text-zinc-300">
         Model
       </label>
       <select
+        id="model-select"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
