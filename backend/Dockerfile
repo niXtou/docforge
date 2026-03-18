@@ -40,11 +40,11 @@ FROM python:3.12-slim AS runtime
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 WORKDIR /app
 
-# Copy only what the app needs to run from the builder stage
-COPY --from=builder /app/.venv /app/.venv        # the installed virtualenv
-COPY --from=builder /app/app /app/app            # application source code
+# Copy only what the app needs to run from the builder stage.
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/app /app/app
 COPY --from=builder /app/alembic.ini /app/alembic.ini
-COPY --from=builder /app/alembic /app/alembic    # database migration scripts
+COPY --from=builder /app/alembic /app/alembic
 
 # Add the virtualenv's bin/ to PATH so Python uses the installed packages
 ENV PATH="/app/.venv/bin:$PATH"
@@ -53,7 +53,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Without this, log lines may not appear in `docker logs` until the buffer fills.
 ENV PYTHONUNBUFFERED=1
 
-USER appuser   # switch to non-root before starting the server
+# Switch to non-root before starting the server
+USER appuser
 EXPOSE 8000
 
 # Production server: 2 worker processes, no --reload (use the compose file for dev)

@@ -35,7 +35,7 @@ services:
       # immediately without rebuilding the image (hot reload).
       # Only the app/ directory is mounted — the venv stays inside the container.
       - ./backend/app:/app/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     # --reload watches for file changes and restarts the server automatically.
     # In production (Dockerfile CMD) --reload is omitted and --workers is used instead.
 
