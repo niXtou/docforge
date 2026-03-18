@@ -93,7 +93,7 @@ class ExtractionResult(BaseModel):
 
     job_id: str
     status: str
-    data: dict[str, object] | None   # the extracted fields; None if job failed
+    data: dict[str, object] | None  # the extracted fields; None if job failed
     validation_passed: bool
     retries_used: int
     model_used: str
@@ -101,6 +101,13 @@ class ExtractionResult(BaseModel):
     chunks_processed: int
 
     model_config = {"from_attributes": True}
+
+
+class ErrorResponse(BaseModel):
+    """Standard error response body."""
+
+    detail: str
+    code: str | None = None  # e.g. "rate_limit_exceeded", "model_not_allowed"
 
 
 class StreamEvent(BaseModel):
@@ -122,7 +129,7 @@ class StreamEvent(BaseModel):
         ...,
         description="node_started | node_completed | retry | error | done",
     )
-    node: str | None = None   # which graph node (parse, chunk, extract, …)
+    node: str | None = None  # which graph node (parse, chunk, extract, …)
     message: str
     timestamp: datetime
     data: dict[str, object] | None = None

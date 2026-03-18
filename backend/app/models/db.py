@@ -55,7 +55,7 @@ class ExtractionSchema(Base):
 
     __tablename__ = "extraction_schemas"
 
-    id: Mapped[int] = mapped_column(primary_key=True)           # auto-incremented by Postgres
+    id: Mapped[int] = mapped_column(primary_key=True)  # auto-incremented by Postgres
     name: Mapped[str] = mapped_column(String(100), unique=True)  # human-readable identifier
     description: Mapped[str] = mapped_column(Text, default="")
     json_schema: Mapped[dict[str, object]] = mapped_column(JSON)  # stored as a JSON column
@@ -83,8 +83,8 @@ class ExtractionJob(Base):
     # Status lifecycle: "pending" → "processing" → "completed" | "completed_with_errors" | "failed"
     status: Mapped[str] = mapped_column(String(20), default="pending")
     original_filename: Mapped[str] = mapped_column(String(255))  # e.g. "invoice_jan.pdf"
-    file_type: Mapped[str] = mapped_column(String(10))            # e.g. ".pdf"
-    model_used: Mapped[str] = mapped_column(String(100))          # OpenRouter model string
+    file_type: Mapped[str] = mapped_column(String(10))  # e.g. ".pdf"
+    model_used: Mapped[str] = mapped_column(String(100))  # OpenRouter model string
 
     # Populated after the LangGraph workflow completes:
     result_data: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
@@ -95,6 +95,13 @@ class ExtractionJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on failure
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)  # set on completion
+
+    # Stage 3: two-phase upload→stream design
+    updated_at: Mapped[datetime | None] = mapped_column(nullable=True, onupdate=func.now())
+    file_path: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )  # temp file for SSE handler
+    api_key: Mapped[str | None] = mapped_column(String(200), nullable=True)  # BYOK stored for SSE
 
     # Many-to-one: each job belongs to one schema.
     schema: Mapped["ExtractionSchema"] = relationship(back_populates="jobs")
