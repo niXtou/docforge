@@ -32,7 +32,7 @@ from app.core.config import settings
 #   prevents "connection closed" errors after Postgres restarts or idle timeouts.
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,     # if True, prints every SQL statement to the log
+    echo=settings.debug,  # if True, prints every SQL statement to the log
     pool_pre_ping=True,
 )
 

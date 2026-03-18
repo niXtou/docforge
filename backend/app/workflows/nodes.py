@@ -82,6 +82,7 @@ async def chunk_text(state: WorkflowState) -> dict[str, Any]:
     # then sentences, then words — preferring natural boundaries over hard cuts.
     # chunk_overlap=400 means consecutive chunks share 400 chars of context so
     # a field that spans a boundary isn't lost.
+    # TODO: make chunk_size and chunk_overlap configurable via settings
     splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=400)
     chunks = splitter.split_text(state.raw_content)
     logger.info("Split document into %d chunks", len(chunks))
@@ -103,8 +104,11 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
     handles the prompt engineering and response parsing for this automatically.
     """
     llm = get_llm(model=state.model, api_key=state.api_key)
-    # with_structured_output wraps the LLM in a chain that enforces schema compliance
-    chain = llm.with_structured_output(state.schema_definition)
+    # with_structured_output requires a top-level "title" to use as the function name
+    schema = state.schema_definition
+    if "title" not in schema:
+        schema = {"title": "ExtractionResult", **schema}
+    chain = llm.with_structured_output(schema)
 
     results: list[dict[str, Any]] = []
     for i, chunk in enumerate(state.chunks):

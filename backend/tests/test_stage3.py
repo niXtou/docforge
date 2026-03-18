@@ -181,9 +181,12 @@ async def test_stream_emits_node_events(
     client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
 ) -> None:
     """GET /api/extract/{job_id}/stream emits node_completed and done SSE events."""
+    import tempfile
+
+    from tests.conftest import TestSessionLocal
+
     # Create a pending job in the DB directly.
     job_id = str(uuid.uuid4())
-    import tempfile
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
         f.write(b"test content")
@@ -202,15 +205,18 @@ async def test_stream_emits_node_events(
     db_session.add(job)
     await db_session.commit()
 
-    # Monkeypatch compiled_graph.astream to return fake node updates.
+    # Monkeypatch compiled_graph.astream to return one fake node update.
     fake_node_output = {"parse": {"file_path": tmp_path, "chunks": ["chunk1"]}}
 
-    async def _fake_astream(state: object):  # type: ignore[override]
+    async def _fake_astream(*args: object, **kwargs: object):  # type: ignore[override]
         yield fake_node_output
 
     with patch("app.services.extraction.compiled_graph") as mock_graph:
         mock_graph.astream = _fake_astream
-        response = await client.get(f"/api/extract/{job_id}/stream")
+        # Redirect AsyncSessionLocal to the test SQLite session factory so the
+        # background task can read/write the same in-memory database as the test.
+        with patch("app.services.extraction.AsyncSessionLocal", TestSessionLocal):
+            response = await client.get(f"/api/extract/{job_id}/stream")
 
     assert response.status_code == 200
     body = response.text
@@ -232,7 +238,7 @@ async def test_stream_already_done_job(
         model_used="google/gemini-2.0-flash",
         result_data={"field1": "value1"},
         validation_passed=True,
-        completed_at=datetime.now(tz=UTC),
+        completed_at=datetime.now(UTC).replace(tzinfo=None),
     )
     db_session.add(job)
     await db_session.commit()
@@ -258,7 +264,7 @@ async def test_result_completed_job(
         validation_passed=True,
         processing_time_ms=1234,
         chunks_processed=2,
-        completed_at=datetime.now(tz=UTC),
+        completed_at=datetime.now(UTC).replace(tzinfo=None),
     )
     db_session.add(job)
     await db_session.commit()

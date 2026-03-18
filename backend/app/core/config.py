@@ -23,14 +23,14 @@ class Settings(BaseSettings):
     """All environment-based configuration for DocForge."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",             # load from .env file if present
+        env_file=".env",  # load from .env file if present
         env_file_encoding="utf-8",
-        case_sensitive=False,        # DATABASE_URL == database_url == DataBase_Url
+        case_sensitive=False,  # DATABASE_URL == database_url == DataBase_Url
     )
 
     # ── App ───────────────────────────────────────────────────────────────────
     secret_key: str = Field(default="change-me-in-production")  # used to sign auth tokens
-    debug: bool = Field(default=False)                           # enables verbose SQL + tracebacks
+    debug: bool = Field(default=False)  # enables verbose SQL + tracebacks
     allowed_origins: list[str] = Field(default=["http://localhost:5173"])  # frontend dev server
 
     # ── Database ──────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # BYOK (Bring Your Own Key): users may supply their own key per request.
     # If they do, their key is used; otherwise the server key below is used.
     openrouter_api_key: str = Field(default="")
-    anthropic_api_key: str = Field(default="")   # reserved for future direct routing
+    anthropic_api_key: str = Field(default="")  # reserved for future direct routing
     openai_api_key: str = Field(default="")
     google_api_key: str = Field(default="")
 
@@ -61,8 +61,9 @@ class Settings(BaseSettings):
     demo_rate_limit_per_hour: int = Field(default=10)
     demo_allowed_models: list[str] = Field(
         default=[
-            "google/gemini-2.0-flash",       # fast, very cost-effective
-            "openai/gpt-4o-mini",             # good reasoning at low cost
+            "google/gemini-2.0-flash",  # fast, very cost-effective
+            "openai/gpt-4o-mini",  # good reasoning at low cost
+            "openai/gpt-5.4-nano",  # latest nano model
             "meta-llama/llama-3.3-70b-instruct",  # open-weight, cheap via OpenRouter
         ]
     )
