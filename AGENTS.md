@@ -107,7 +107,7 @@ Key files to read first: `SOURCE_OF_TRUTH.md` (architecture), `backend/app/workf
 
 ## LLM provider pattern
 
-All LLM calls go through `app/core/llm.py:get_llm()`. Returns a LangChain `ChatOpenAI` pointed at OpenRouter (`base_url="https://openrouter.ai/api/v1"`). Do NOT import provider SDKs directly elsewhere. BYOK (user-provided API key) is handled per-request, not per-module.
+All LLM calls go through `app/core/llm.py:get_llm()`. Returns a `ChatOpenRouter` from `langchain-openrouter` (the official first-party integration). Do NOT import provider SDKs directly elsewhere. BYOK (user-provided API key) is handled per-request, not per-module.
 
 ## Docker
 
