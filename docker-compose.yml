@@ -70,6 +70,15 @@ services:
     ports:
       - "6379:6379"
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"    # visit http://localhost:3000
+    depends_on:
+      - backend
+
 # Named volumes are managed by Docker and persist across container restarts.
 # To wipe all data and start fresh: docker compose down -v
 volumes:
