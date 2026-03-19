@@ -129,7 +129,7 @@ docker compose up --build
 curl -X POST http://localhost:8000/api/extract \
   -F "file=@sample-invoice.pdf" \
   -F "schema_id=1" \
-  -F "model=google/gemini-2.0-flash"
+  -F "model=google/gemini-2.0-flash-001"
 
 # Stream progress (SSE)
 curl -N http://localhost:8000/api/extract/{job_id}/stream

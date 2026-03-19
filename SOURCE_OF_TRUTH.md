@@ -1,7 +1,7 @@
 # DocForge — Source of Truth
 
-> **Last updated**: 2026-03-18
-> **Status**: Stages 1–3 complete · Stage 4 (Frontend) next
+> **Last updated**: 2026-03-19
+> **Status**: Stages 1–4 complete · Stage 5 (Production Config & CI/CD) next
 > **Author**: nstoug
 > **Live demo target**: `docforge.nstoug.com`
 > **Repository**: `github.com/nstoug/docforge`
@@ -153,7 +153,7 @@ class WorkflowState(BaseModel):
     file_type: str = ""
     raw_content: str = ""
     schema_definition: dict          # JSON Schema the LLM must conform to
-    model: str = "google/gemini-2.0-flash"
+    model: str = "google/gemini-2.0-flash-001"
     api_key: str | None = None       # BYOK; None = use server key
 
     # Processing — filled in by nodes
@@ -275,7 +275,7 @@ docforge/
 ├── README.md                       # Public-facing project README
 ├── .gitignore
 ├── .pre-commit-config.yaml
-├── docker-compose.yml              # Local development (backend + postgres + redis)
+├── docker-compose.yml              # Local development (backend + postgres + redis + frontend)
 ├── docker-compose.prod.yml         # Production (+ nginx + frontend)
 ├── .env.example                    # Template for required env vars
 │
@@ -318,23 +318,33 @@ docforge/
 │   ├── test_workflow.py            # LangGraph workflow tests (mocked LLM)
 │   └── test_stage3.py              # Schema CRUD + extraction endpoint tests
 │
-├── frontend/                       # Stage 4 — not yet implemented
-│   ├── Dockerfile
+├── frontend/
+│   ├── Dockerfile                  # Multi-stage: node:22-alpine build → nginx:1.25-alpine serve
+│   ├── nginx.conf                  # SPA fallback + /api/ proxy to backend:8000 (SSE-safe headers)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vite.config.ts
 │   ├── tailwind.config.ts
 │   └── src/
-│       ├── api/client.ts           # API client + SSE consumer
+│       ├── App.tsx                 # 4-step wizard: upload → streaming → results
+│       ├── App.test.tsx            # Vitest: renders, extract disabled, form submit
+│       ├── api/
+│       │   ├── client.ts           # Typed fetch wrappers: listSchemas, uploadDocument, getResult, streamUrl
+│       │   └── client.test.ts      # 6 tests using vi.spyOn(globalThis, 'fetch')
 │       ├── components/
-│       │   ├── DocumentUpload.tsx
-│       │   ├── SchemaSelector.tsx
-│       │   ├── ExtractionProgress.tsx   # Real-time SSE visualization
-│       │   ├── ResultsViewer.tsx
-│       │   ├── ApiKeyInput.tsx
-│       │   └── Layout.tsx
-│       ├── hooks/useSSE.ts         # Custom EventSource hook
-│       └── types/index.ts
+│       │   ├── Layout.tsx          # Sticky header + main + footer shell
+│       │   ├── DocumentUpload.tsx  # Drag-and-drop, click-to-upload, .pdf/.txt/.csv/.md validation
+│       │   ├── SchemaSelector.tsx  # Dropdown + "view schema" JSON modal
+│       │   ├── ModelSelector.tsx   # Radio-group (not select — avoids combobox aria conflicts)
+│       │   ├── ApiKeyInput.tsx     # BYOK toggle switch + password field with show/hide
+│       │   ├── ExtractionProgress.tsx  # 5-node stepper matching LangGraph node names
+│       │   └── ResultsViewer.tsx   # Stats row + JSON/table toggle + copy-to-clipboard
+│       ├── hooks/
+│       │   ├── useSSE.ts           # EventSource hook → events[], SSEStatus, error, reset()
+│       │   └── useSSE.test.ts      # 7 tests with MockEventSource via vi.stubGlobal
+│       ├── test/
+│       │   └── setup.ts            # Vitest setup: @testing-library/jest-dom + NoopEventSource stub
+│       └── types/index.ts          # Schema, ExtractionJobResponse, ExtractionResult, StreamEvent, DEMO_MODELS
 │
 └── nginx/                          # Production reverse proxy (Stage 6)
     └── nginx.conf                  # server_name docforge.nstoug.com + TLS
@@ -369,7 +379,7 @@ class SchemaCreate(BaseModel):
 
 class ExtractionRequest(BaseModel):
     schema_id: int = Field(..., gt=0)
-    model: str = Field(default="google/gemini-2.0-flash")
+    model: str = Field(default="google/gemini-2.0-flash-001")
     api_key: str | None = None  # BYOK — bypasses rate limits and model whitelist
 
 # ── Response Models ───────────────────────────────────────────────────────────
@@ -487,7 +497,7 @@ from langchain_openrouter import ChatOpenRouter
 from app.core.config import settings
 
 def get_llm(
-    model: str = "google/gemini-2.0-flash",
+    model: str = "google/gemini-2.0-flash-001",
     api_key: str | None = None,
     temperature: float = 0.0,
 ) -> ChatOpenRouter:
@@ -513,7 +523,7 @@ Redis INCR + EXPIRE per client IP. 1-hour sliding window.
 ```python
 # Model whitelist (demo mode — no api_key provided)
 demo_allowed_models = [
-    "google/gemini-2.0-flash",              # fast, very cost-effective
+    "google/gemini-2.0-flash-001",              # fast, very cost-effective
     "openai/gpt-4o-mini",                   # good reasoning at low cost
     "openai/gpt-5.4-nano",                  # latest nano
     "meta-llama/llama-3.3-70b-instruct",    # open-weight, cheap via OpenRouter
@@ -560,19 +570,24 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 # Stage 1: Build
 FROM node:22-alpine AS builder
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Export build artefacts
-FROM alpine:latest AS output
-COPY --from=builder /app/dist /app/dist
+# Stage 2: Serve with Nginx
+FROM nginx:1.25-alpine AS runtime
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 ```
+
+The `nginx.conf` baked into the image proxies `/api/` to `backend:8000` with SSE-safe settings (`proxy_buffering off`, `proxy_http_version 1.1`, `Connection ''`, `proxy_read_timeout 300s`) and serves the SPA with a `try_files` fallback.
 
 ### Docker Compose (local development)
 
-Three services: `backend`, `db` (Postgres 15), `redis` (Redis 7). Backend mounts `./backend/app` for hot reload. Services declare health checks so the backend only starts after Postgres and Redis are ready.
+Four services: `backend`, `db` (Postgres 15), `redis` (Redis 7), `frontend` (nginx serving React build on port 3000). Backend mounts `./backend/app` for hot reload. Services declare health checks so the backend only starts after Postgres and Redis are ready.
 
 ### Docker Compose (production — `docker-compose.prod.yml`)
 
@@ -654,7 +669,7 @@ GOOGLE_API_KEY=...
 
 # === Rate Limiting (demo mode) ===
 DEMO_RATE_LIMIT_PER_HOUR=10
-DEMO_ALLOWED_MODELS=["google/gemini-2.0-flash","openai/gpt-4o-mini","openai/gpt-5.4-nano","meta-llama/llama-3.3-70b-instruct"]
+DEMO_ALLOWED_MODELS=["google/gemini-2.0-flash-001","openai/gpt-4o-mini","openai/gpt-5.4-nano","meta-llama/llama-3.3-70b-instruct"]
 ```
 
 ---
@@ -702,26 +717,22 @@ Notable implementation details:
 
 ---
 
-### Stage 4: React Frontend
+### ✅ Stage 4: React Frontend
 
-**Goal**: Clean, functional UI — document upload, schema selection, real-time SSE progress visualization, structured results display.
+**Delivered**: Full SPA wizard — document upload, schema + model selection, BYOK, real-time SSE node progress, structured results with JSON/table toggle.
 
-**Tasks**:
-1. Scaffold: `npm create vite@latest frontend -- --template react-ts`
-2. Configure Tailwind CSS
-3. Build components:
-   - `Layout.tsx` — header, footer, dark/light mode toggle
-   - `DocumentUpload.tsx` — drag-and-drop file upload
-   - `SchemaSelector.tsx` — dropdown of schemas + "view schema" modal
-   - `ApiKeyInput.tsx` — BYOK toggle with key field
-   - `ExtractionProgress.tsx` — animated step indicators, one per LangGraph node, with retry visualization
-   - `ResultsViewer.tsx` — structured JSON viewer + table view toggle
-4. Implement `hooks/useSSE.ts` — custom `EventSource` hook
-5. Implement `api/client.ts` — typed API client
-6. Wire together in `App.tsx`
-7. Frontend Dockerfile + integrate into `docker-compose.yml`
+Key files: `frontend/src/App.tsx`, `frontend/src/api/client.ts`, `frontend/src/hooks/useSSE.ts`, all components, `frontend/Dockerfile`, `frontend/nginx.conf`.
 
-**Quality gate**: Full flow works in browser — upload → SSE progress → results. Responsive on mobile.
+Notable implementation details:
+- **`useSSE` hook**: Wraps `EventSource`, yields typed `StreamEvent[]`, `SSEStatus` (`idle|connecting|streaming|done|error`), `error`, and `reset()`. `useRef` status guard prevents stale-closure races on transport errors.
+- **`App.tsx` SSE→result transition**: `useEffect` + `resultFetchedRef` ensures `getResult()` fires exactly once when SSE reaches `done`, even under React 19 strict-mode double-invocation.
+- **`ModelSelector`**: Implemented as a radio-group (not `<select>`) to avoid multiple `combobox` ARIA roles conflicting with `SchemaSelector` in tests.
+- **Static imports**: All API client functions use static `import` (not dynamic `import()`) so `vi.spyOn` works correctly in Vitest.
+- **`NoopEventSource` stub**: Added to `test/setup.ts` so jsdom tests don't throw `EventSource is not defined`.
+- **Nginx SSE config**: `proxy_buffering off`, `proxy_http_version 1.1`, `Connection ''`, `proxy_read_timeout 300s` — required for SSE to flow through the reverse proxy.
+- **`docker-compose.yml`**: Frontend service added on port 3000 (`3000:80`), depends on backend.
+
+**Quality gate passed**: 16/16 frontend tests pass, `npm run lint` clean, `npm run build` produces 210KB bundle. Backend: 23/23 tests pass (unchanged).
 
 ---
 
