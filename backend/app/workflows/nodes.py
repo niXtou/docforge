@@ -22,7 +22,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from langchain_community.document_loaders import CSVLoader, PyPDFLoader, TextLoader
+import pymupdf4llm
+from langchain_community.document_loaders import CSVLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.llm import get_llm
@@ -40,23 +41,31 @@ async def parse_document(state: WorkflowState) -> dict[str, Any]:
     ext = state.file_type if state.file_type else Path(state.file_path).suffix.lower()
 
     if ext == ".pdf":
-        loader: PyPDFLoader | CSVLoader | TextLoader = PyPDFLoader(state.file_path)
-    elif ext == ".csv":
-        loader = CSVLoader(state.file_path)
+        # pymupdf4llm produces clean markdown — preserves word order in styled fonts.
+        # Do NOT pass page_chunks=True; that changes the return type to list[dict].
+        try:
+            text = await asyncio.to_thread(pymupdf4llm.to_markdown, state.file_path)
+        except Exception as e:
+            raise FileNotFoundError(f"Could not read file {state.file_path}: {e}") from e
+        logger.info("Parsed PDF document from %s", state.file_path)
+        return {
+            "raw_content": text,
+            "file_type": ext,
+            "messages": state.messages + ["Parsed PDF document"],
+        }
+
+    if ext == ".csv":
+        loader: CSVLoader | TextLoader = CSVLoader(state.file_path)
     elif ext in {".txt", ".md"}:
         loader = TextLoader(state.file_path)
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-    # LangChain loaders are synchronous. We run them in a thread so they don't
-    # block the async event loop while reading from disk.
     try:
         docs = await asyncio.to_thread(loader.load)
     except OSError as e:
         raise FileNotFoundError(f"Could not read file {state.file_path}: {e}") from e
 
-    # Multi-page documents (PDFs) produce one `Document` object per page.
-    # We join them into a single string for uniform downstream processing.
     text = "\n\n".join(doc.page_content for doc in docs)
 
     logger.info("Parsed %d document(s) from %s file", len(docs), ext)
