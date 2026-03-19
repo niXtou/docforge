@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getResult, listSchemas, streamUrl, uploadDocument } from './client'
 import type { ExtractionResult, Schema } from '../types'
 
 // Helper to mock a JSON response
 function mockFetch(body: unknown, status = 200): void {
-  vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+  vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
     new Response(JSON.stringify(body), {
       status,
       headers: { 'Content-Type': 'application/json' },
@@ -26,7 +26,7 @@ describe('listSchemas', () => {
   })
 
   it('throws on non-OK response', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response('', { status: 500 }),
     )
     await expect(listSchemas()).rejects.toThrow('HTTP 500')
@@ -53,7 +53,7 @@ describe('uploadDocument', () => {
   })
 
   it('throws ErrorResponse on 403', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(JSON.stringify({ detail: 'not allowed', code: 'model_not_allowed' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json' },

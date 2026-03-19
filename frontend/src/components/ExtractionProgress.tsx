@@ -67,7 +67,6 @@ export function ExtractionProgress({ events, status, error }: Props) {
         {NODES.map((node, i) => {
           const done = completedNodes.has(node.id)
           const active = isActiveNode(node.id)
-          const pending = !done && !active
 
           return (
             <div

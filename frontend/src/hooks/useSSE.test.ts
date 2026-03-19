@@ -9,11 +9,13 @@ type EventHandler = (e: MessageEvent) => void
 
 class MockEventSource {
   static current: MockEventSource | null = null
-  private listeners: Record<string, EventHandler[]> = {}
-  readonly close = vi.fn()
+  listeners: Record<string, EventHandler[]> = {}
+  close = vi.fn()
   onerror: ((e: Event) => void) | null = null
+  url: string
 
-  constructor(public readonly url: string) {
+  constructor(url: string) {
+    this.url = url
     MockEventSource.current = this
   }
 

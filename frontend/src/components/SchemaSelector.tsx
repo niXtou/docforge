@@ -49,7 +49,6 @@ export function SchemaSelector({ value, onChange }: Props) {
           {schemas.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
-              {s.is_builtin ? ' ✦' : ''}
             </option>
           ))}
         </select>
