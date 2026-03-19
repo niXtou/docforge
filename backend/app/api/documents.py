@@ -27,7 +27,7 @@ async def upload_document(
     request: Request,
     file: UploadFile = File(...),
     schema_id: int = Form(...),
-    model: str = Form(default="google/gemini-2.0-flash"),
+    model: str = Form(default="google/gemini-2.0-flash-001"),
     api_key: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_demo_access),

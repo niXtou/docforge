@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     demo_rate_limit_per_hour: int = Field(default=10)
     demo_allowed_models: list[str] = Field(
         default=[
-            "google/gemini-2.0-flash",  # fast, very cost-effective
+            "google/gemini-2.0-flash-001",  # fast, very cost-effective
             "openai/gpt-4o-mini",  # good reasoning at low cost
             "openai/gpt-5.4-nano",  # latest nano model
             "meta-llama/llama-3.3-70b-instruct",  # open-weight, cheap via OpenRouter

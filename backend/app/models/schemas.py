@@ -46,7 +46,7 @@ class ExtractionRequest(BaseModel):
 
     schema_id: int = Field(..., gt=0, description="ID of the extraction schema to use")
     model: str = Field(
-        default="google/gemini-2.0-flash",
+        default="google/gemini-2.0-flash-001",
         min_length=1,
         description="OpenRouter model string",
     )

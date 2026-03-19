@@ -57,7 +57,7 @@ async def require_demo_access(request: Request) -> None:
     """
     form = await request.form()
     api_key = form.get("api_key") or None
-    model = str(form.get("model", "google/gemini-2.0-flash"))
+    model = str(form.get("model", "google/gemini-2.0-flash-001"))
 
     check_model_allowed(model, api_key)  # type: ignore[arg-type]
 

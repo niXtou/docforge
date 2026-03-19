@@ -44,7 +44,7 @@ class WorkflowState(BaseModel):
     raw_content: str = ""  # filled in by parse_document; empty until then
     file_type: str = ""  # e.g. ".pdf" — set by caller or detected by parse_document
     schema_definition: dict  # type: ignore[type-arg]  # JSON Schema the LLM must conform to
-    model: str = "google/gemini-2.0-flash"  # OpenRouter model string
+    model: str = "google/gemini-2.0-flash-001"  # OpenRouter model string
     api_key: str | None = None  # BYOK key; None = use the server's OpenRouter key
 
     # ── Processing ────────────────────────────────────────────────────────────

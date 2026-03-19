@@ -105,7 +105,7 @@ async def test_upload_creates_pending_job(
     try:
         response = await client.post(
             "/api/extract",
-            data={"schema_id": str(seeded_schema.id), "model": "google/gemini-2.0-flash"},
+            data={"schema_id": str(seeded_schema.id), "model": "google/gemini-2.0-flash-001"},
             files={"file": ("test.txt", io.BytesIO(b"hello world"), "text/plain")},
         )
     finally:
@@ -149,7 +149,7 @@ async def test_upload_rate_limit_exceeded(
             "/api/extract",
             data={
                 "schema_id": str(seeded_schema.id),
-                "model": "google/gemini-2.0-flash",
+                "model": "google/gemini-2.0-flash-001",
             },
             files={"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")},
         )
@@ -198,7 +198,7 @@ async def test_stream_emits_node_events(
         status="pending",
         original_filename="test.txt",
         file_type=".txt",
-        model_used="google/gemini-2.0-flash",
+        model_used="google/gemini-2.0-flash-001",
         file_path=tmp_path,
         api_key=None,
     )
@@ -235,7 +235,7 @@ async def test_stream_already_done_job(
         status="completed",
         original_filename="done.txt",
         file_type=".txt",
-        model_used="google/gemini-2.0-flash",
+        model_used="google/gemini-2.0-flash-001",
         result_data={"field1": "value1"},
         validation_passed=True,
         completed_at=datetime.now(UTC).replace(tzinfo=None),
@@ -259,7 +259,7 @@ async def test_result_completed_job(
         status="completed",
         original_filename="done.txt",
         file_type=".txt",
-        model_used="google/gemini-2.0-flash",
+        model_used="google/gemini-2.0-flash-001",
         result_data={"field1": "extracted_value"},
         validation_passed=True,
         processing_time_ms=1234,
@@ -289,7 +289,7 @@ async def test_result_pending_job_409(
         status="pending",
         original_filename="pending.txt",
         file_type=".txt",
-        model_used="google/gemini-2.0-flash",
+        model_used="google/gemini-2.0-flash-001",
     )
     db_session.add(job)
     await db_session.commit()

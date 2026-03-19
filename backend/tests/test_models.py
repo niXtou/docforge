@@ -29,4 +29,4 @@ def test_workflow_state_defaults():
     assert state.max_retries == 3
     assert state.chunks == []
     assert state.final_result is None
-    assert state.model == "google/gemini-2.0-flash"
+    assert state.model == "google/gemini-2.0-flash-001"
