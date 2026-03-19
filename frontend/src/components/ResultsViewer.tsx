@@ -32,7 +32,7 @@ export function ResultsViewer({ result }: Props) {
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Status', value: result.status.replace('_', ' '), colorClass: statusColor },
+          { label: 'Status', value: result.status.replaceAll('_', ' '), colorClass: statusColor },
           { label: 'Time', value: `${result.processing_time_ms}ms` },
           { label: 'Chunks', value: String(result.chunks_processed) },
           { label: 'Retries', value: String(result.retries_used) },
