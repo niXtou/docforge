@@ -15,7 +15,7 @@ type Step = 'configure' | 'streaming' | 'done'
 export default function App() {
   // ── Form state ──────────────────────────────────────────────────────────────
   const [schema, setSchema] = useState<Schema | null>(null)
-  const [model, setModel] = useState('google/gemini-2.0-flash')
+  const [model, setModel] = useState('google/gemini-2.0-flash-001')
   const [apiKey, setApiKey] = useState('')
   const [file, setFile] = useState<File | null>(null)
 

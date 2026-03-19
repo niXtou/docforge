@@ -60,7 +60,7 @@ export interface ErrorResponse {
  * Must stay in sync with backend settings.demo_allowed_models.
  */
 export const DEMO_MODELS = [
-  { id: 'google/gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+  { id: 'google/gemini-2.0-flash-001', label: 'Gemini 2.0 Flash' },
   { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
   { id: 'openai/gpt-5.4-nano', label: 'GPT-5.4 Nano' },
   { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },

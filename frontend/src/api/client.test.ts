@@ -44,7 +44,7 @@ describe('uploadDocument', () => {
     const result = await uploadDocument({
       file,
       schemaId: 1,
-      model: 'google/gemini-2.0-flash',
+      model: 'google/gemini-2.0-flash-001',
       apiKey: null,
     })
 
@@ -76,7 +76,7 @@ describe('getResult', () => {
       data: { invoice_number: 'INV-001' },
       validation_passed: true,
       retries_used: 0,
-      model_used: 'google/gemini-2.0-flash',
+      model_used: 'google/gemini-2.0-flash-001',
       processing_time_ms: 1200,
       chunks_processed: 1,
     }

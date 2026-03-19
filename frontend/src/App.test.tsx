@@ -23,7 +23,7 @@ const mockResult: ExtractionResult = {
   data: { invoice_number: 'INV-001', total_amount: 100 },
   validation_passed: true,
   retries_used: 0,
-  model_used: 'google/gemini-2.0-flash',
+  model_used: 'google/gemini-2.0-flash-001',
   processing_time_ms: 800,
   chunks_processed: 1,
 }
