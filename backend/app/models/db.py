@@ -81,7 +81,7 @@ class ExtractionJob(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID (caller provides it)
     schema_id: Mapped[int] = mapped_column(ForeignKey("extraction_schemas.id"))  # which schema
     # Status lifecycle: "pending" → "processing" → "completed" | "completed_with_errors" | "failed"
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(50), default="pending")
     original_filename: Mapped[str] = mapped_column(String(255))  # e.g. "invoice_jan.pdf"
     file_type: Mapped[str] = mapped_column(String(10))  # e.g. ".pdf"
     model_used: Mapped[str] = mapped_column(String(100))  # OpenRouter model string
