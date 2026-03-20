@@ -1,7 +1,7 @@
 # DocForge — Source of Truth
 
 > **Last updated**: 2026-03-20
-> **Status**: Stages 1–5 complete · Stage 6 (Deployment & Documentation) next
+> **Status**: Stages 1–5 complete + production hardening · Stage 6 (README & portfolio integration) next
 > **Author**: nstoug
 > **Live demo target**: `docforge.nstoug.com`
 > **Repository**: `github.com/niXtou/docforge`
@@ -34,48 +34,43 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Cloudflare (Proxied DNS, Full Strict SSL)                        │
-│  docforge.nstoug.com → Hetzner VPS :443                          │
+│  Cloudflare (Proxied DNS, Full Strict SSL, HSTS, Bot Fight Mode)  │
+│  nstoug.com / docforge.nstoug.com → Hetzner VPS :443             │
 └──────────────┬───────────────────────────────────────────────────┘
                │
 ┌──────────────▼───────────────────────────────────────────────────┐
 │  Hetzner VPS — cax11 (ARM64, 2 vCPU, 4 GB RAM)                   │
-│  /root/docforge/                                                  │
 │                                                                   │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  Nginx (Alpine)                                             │  │
-│  │  :443 TLS termination (Cloudflare Origin Cert)              │  │
-│  │  /          → frontend (React static build)                 │  │
-│  │  /api/*     → FastAPI backend :8000                         │  │
-│  │  /docs      → FastAPI auto-generated OpenAPI                │  │
-│  └──────┬──────────────┬───────────────────────────────────────┘  │
-│         │              │                                          │
-│  ┌──────▼──────┐  ┌───▼───────────────────────────────────┐      │
-│  │  Frontend   │  │  Backend (FastAPI + Uvicorn)           │      │
-│  │  React 19   │  │  :8000                                 │      │
-│  │  Vite build │  │                                        │      │
-│  │  served by  │  │  ┌─────────────────────────────┐       │      │
-│  │  Nginx      │  │  │  LangGraph Workflow Engine   │       │      │
-│  └─────────────┘  │  │                              │       │      │
-│                   │  │  Parse → Chunk → Extract      │       │      │
-│                   │  │                   │    ▲      │       │      │
-│                   │  │                   ▼    │      │       │      │
-│                   │  │             Validate ──┘      │       │      │
-│                   │  │                   │           │       │      │
-│                   │  │                   ▼           │       │      │
-│                   │  │                Merge          │       │      │
-│                   │  └─────────────────────────────┘       │      │
-│                   │         │              │               │      │
-│                   │    ┌────▼───┐    ┌────▼────┐          │      │
-│                   │    │Postgres│    │  Redis   │          │      │
-│                   │    │  :5432 │    │  :6379   │          │      │
-│                   │    └────────┘    └─────────┘          │      │
-│                   └────────────────────────────────────────┘      │
-│                                         │                         │
-│                                    ┌────▼──────────┐              │
-│                                    │  OpenRouter    │              │
-│                                    │  (200+ models) │              │
-│                                    └───────────────┘              │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │  Gateway Nginx  (niXtou/hetzner-vps-portfolio-infra)         │ │
+│  │  :80  → redirect to :443                                     │ │
+│  │  :443 TLS — Cloudflare Origin wildcard cert (*.nstoug.com)   │ │
+│  │  nstoug.com          → portfolio-nginx:80   (gateway_net)    │ │
+│  │  docforge.nstoug.com → docforge-frontend:80 (gateway_net)    │ │
+│  └────────────────────────────┬─────────────────────────────────┘ │
+│                               │  Docker network: gateway_net       │
+│              ┌────────────────▼────────────────┐                   │
+│              │  DocForge frontend nginx (:80)   │                   │
+│              │  /         → React SPA           │                   │
+│              │  /api/*    → backend:8000 (SSE)  │                   │
+│              └────────────────┬────────────────┘                   │
+│                               │  Docker network: internal          │
+│              ┌────────────────▼────────────────┐                   │
+│              │  Backend (FastAPI + Uvicorn)     │                   │
+│              │  ┌──────────────────────────┐   │                   │
+│              │  │  LangGraph Workflow       │   │                   │
+│              │  │  Parse→Chunk→Extract      │   │                   │
+│              │  │  Validate ↺ (max 3)       │   │                   │
+│              │  │  Merge→Done               │   │                   │
+│              │  └──────────────────────────┘   │                   │
+│              └──────────┬──────────┬───────────┘                   │
+│                    ┌────▼───┐  ┌───▼────┐                          │
+│                    │Postgres│  │ Redis  │   (internal only)         │
+│                    └────────┘  └────────┘                          │
+│                                    │                               │
+│                            ┌───────▼──────┐                        │
+│                            │  OpenRouter  │  (external API)         │
+│                            └─────────────┘                         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,19 +80,19 @@
 |--------|------|---------|-------|-------|
 | `docforge` | A | `<VPS IP>` | Proxied 🟠 | Same pattern as `api.nstoug.com` |
 
-**SSL**: Cloudflare Full (Strict) with Origin Certificate. Use a wildcard `*.nstoug.com` cert or generate a separate origin cert for `docforge.nstoug.com`.
+**SSL**: Cloudflare Full (Strict) with Cloudflare Origin Certificate (`*.nstoug.com` wildcard covering all subdomains). HSTS enabled at Cloudflare edge (6-month max-age, includeSubDomains).
 
-**Multi-project Nginx pattern** (recommended):
+**Multi-project gateway pattern** (`niXtou/hetzner-vps-portfolio-infra`):
 ```
-/root/
-├── portfolio/          # existing — docker-compose.prod.yml
-├── docforge/           # this project — docker-compose.prod.yml
-└── gateway/            # lightweight Nginx routing by server_name
+~/
+├── portfolio/                        # my-portfolio-site stack
+├── docforge/                         # DocForge stack
+└── hetzner-vps-portfolio-infra/      # gateway (owns ports 80/443)
     ├── docker-compose.yml
-    └── nginx.conf      # server blocks: api.nstoug.com, docforge.nstoug.com, …
+    └── nginx/nginx.conf              # server block per project
 ```
 
-Each project is fully self-contained (start/stop independently). Adding a new demo requires: a folder, a server block, and a Cloudflare DNS record.
+Each project joins the shared `gateway_net` Docker network with a stable alias. Adding a project: add an upstream + server block to nginx.conf, `docker compose up -d --force-recreate`. No changes to other projects.
 
 ### 2.3 LangGraph Workflow (Core Logic)
 
@@ -346,8 +341,7 @@ docforge/
 │       │   └── setup.ts            # Vitest setup: @testing-library/jest-dom + NoopEventSource stub
 │       └── types/index.ts          # Schema, ExtractionJobResponse, ExtractionResult, StreamEvent, DEMO_MODELS
 │
-└── nginx/                          # Production reverse proxy (Stage 6)
-    └── nginx.conf                  # server_name docforge.nstoug.com + TLS
+└── docker-compose.prod.yml         # Production stack (pulled from GHCR, joins gateway_net)
 ```
 
 ---
@@ -567,8 +561,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 ### Frontend Dockerfile (multi-stage)
 
 ```dockerfile
-# Stage 1: Build
-FROM node:22-alpine AS builder
+# Stage 1: Build (--platform=$BUILDPLATFORM runs npm on native x86 CI runner,
+# avoiding QEMU illegal-instruction crash with Node on ARM64 emulation)
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
@@ -591,50 +586,24 @@ Four services: `backend`, `db` (Postgres 15), `redis` (Redis 7), `frontend` (ngi
 
 ### Docker Compose (production — `docker-compose.prod.yml`)
 
-Adds `nginx` (TLS termination, static frontend serving) and `frontend` (build outputs to shared volume). Target architecture: ARM64 (Hetzner cax11).
+Four services pulled from GHCR. No host port bindings — traffic arrives from the gateway nginx via `gateway_net`. Target architecture: ARM64 (Hetzner cax11).
 
-```yaml
-services:
-  backend:
-    image: ghcr.io/nstoug/docforge-backend:latest
-    env_file: .env
-    depends_on: { db: { condition: service_healthy }, redis: { condition: service_healthy } }
-    expose: ["8000"]
-    restart: unless-stopped
+| Service | Image | Networks | Notes |
+|---------|-------|----------|-------|
+| `backend` | `ghcr.io/nixtou/docforge-backend:latest` | internal | resource limits: 1.5 CPU / 1500M |
+| `frontend` | `ghcr.io/nixtou/docforge-frontend:latest` | internal + gateway_net | alias: `docforge-frontend` |
+| `db` | `postgres:15-alpine` | internal | volume: `docforge_pgdata` |
+| `redis` | `redis:7-alpine` | internal | volume: `docforge_redisdata` |
 
-  db:
-    image: postgres:15-alpine
-    volumes: [docforge_pgdata:/var/lib/postgresql/data]
-    environment: { POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD }
-    healthcheck: { test: pg_isready, interval: 10s, retries: 5 }
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    volumes: [docforge_redisdata:/data]
-    healthcheck: { test: redis-cli ping, interval: 10s, retries: 5 }
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:1.25-alpine
-    ports: ["8081:443", "8082:80"]     # different host ports from portfolio (8080)
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-      - frontend_build:/usr/share/nginx/html:ro
-    depends_on: [backend]
-    restart: unless-stopped
-
-  frontend:
-    build: { context: ./frontend, dockerfile: Dockerfile }
-    volumes: [frontend_build:/app/dist]
-```
+`gateway_net` is declared `external: true` — created once by `hetzner-vps-portfolio-infra` (`docker network create gateway_net`).
 
 ### CI/CD (`.github/workflows/deploy.yml`)
 
-1. **Test**: `pytest` (backend) + `vitest` (frontend)
-2. **Build**: Multi-arch Docker build (ARM64), push to GHCR
-3. **Deploy**: SSH into VPS → pull images → `alembic upgrade head` → restart
+Three jobs, all third-party actions pinned to commit SHAs:
+
+1. **test**: ruff + pyright + pytest (backend); eslint + vitest (frontend)
+2. **build-push**: QEMU ARM64 cross-compile → push `ghcr.io/nixtou/docforge-{backend,frontend}:latest`
+3. **deploy**: SCP `docker-compose.prod.yml` to VPS → SSH → pull → `alembic upgrade head` → `docker compose up -d`
 
 ---
 
@@ -738,44 +707,38 @@ Notable implementation details:
 
 ### Stage 5: CI/CD + Production Infrastructure ✅ COMPLETE
 
-**Goal**: Production-grade containers, GitHub Actions CI/CD pipeline, pre-commit hooks.
+**Goal**: Production-grade containers, GitHub Actions CI/CD pipeline, pre-commit hooks, live deployment, production hardening.
 
 **Completed tasks**:
-1. Created `docker-compose.prod.yml` — backend + frontend + db + redis; frontend joins external `gateway_net` with alias `docforge-frontend`
-2. Created `.github/workflows/deploy.yml` — test → ARM64 build → GHCR push → SSH deploy (3-job pipeline)
+1. Created `docker-compose.prod.yml` — backend + frontend + db + redis; frontend joins `gateway_net` as `docforge-frontend`; resource limits on all containers
+2. Created `.github/workflows/deploy.yml` — test → ARM64 build → GHCR push → SCP + SSH deploy (3-job pipeline, all actions SHA-pinned)
 3. Created `.pre-commit-config.yaml` — ruff-format, ruff, pyright, trailing-whitespace, eof-fixer, no-commit-to-branch
-4. Created GitHub repo `niXtou/docforge` (public) and pushed all history
-5. Installed pre-commit hooks via `uv tool install pre-commit`
+4. Created GitHub repo `niXtou/docforge` (public); branch protection on `main`; Dependabot + secret scanning enabled
+5. Created `niXtou/hetzner-vps-portfolio-infra` (private) — central gateway nginx owning ports 80/443, routing by domain across all VPS projects
+6. Deployed to production: `docforge.nstoug.com` live, migrations applied, all health checks passing
+7. Production hardening: uv version pinned, HSTS at Cloudflare edge + nginx, rate limiting (20 r/s general / 5 r/s API), SSL session caching, keepalive upstreams, `docker image prune` (safe on shared VPS), portfolio port 8000 binding removed
 
 **Architecture note — gateway_net**:
-DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/vps-infra` (separate
-private repo). DocForge's frontend container joins the shared `gateway_net` Docker network
-(external, created once by vps-infra) with alias `docforge-frontend`. The vps-infra nginx
-routes `docforge.nstoug.com → docforge-frontend:80`. Lifecycle: add a project → add a server
-block to vps-infra nginx.conf + deploy that project's stack.
+DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/hetzner-vps-portfolio-infra`. DocForge's frontend joins the shared `gateway_net` Docker network with alias `docforge-frontend`. Lifecycle: add a project → add an upstream + server block to vps-infra nginx.conf + deploy that project's stack.
 
-**Quality gate**: `docker compose -f docker-compose.prod.yml config` validates clean. All
-pre-commit hooks pass. GitHub Actions pipeline triggers on push to main.
+**Quality gate**: `curl https://docforge.nstoug.com/api/health` → `{"status":"ok","database":"ok","version":"0.1.0"}`. All pre-commit hooks pass. GitHub Actions 3 green jobs on push to main.
 
 ---
 
-### Stage 6: Deployment & Documentation
+### Stage 6: README & Portfolio Integration
 
-**Goal**: Live at `docforge.nstoug.com`, polished README, portfolio integration.
+**Goal**: Polished README, portfolio entry, full smoke test.
 
 **Tasks**:
-1. **Cloudflare**: Add `docforge` A record (proxied) → VPS IP
-2. **SSL**: Generate Cloudflare Origin Certificate for `docforge.nstoug.com`
-3. **VPS setup**: `mkdir -p /root/docforge`, deploy compose stack, run migrations
-4. **Nginx gateway** (if not already in place): add `docforge.nstoug.com` server block
+1. ~~**Cloudflare**: Add `docforge` A record (proxied) → VPS IP~~ ✅ Done
+2. ~~**SSL**: Cloudflare Origin Certificate (`*.nstoug.com` wildcard)~~ ✅ Done
+3. ~~**VPS setup**: deploy compose stack, run migrations~~ ✅ Done
+4. ~~**Nginx gateway**: `docforge.nstoug.com` server block in hetzner-vps-portfolio-infra~~ ✅ Done
 5. **README.md**: Architecture diagram (Mermaid), quick start, API reference, demo GIF
-6. **Portfolio integration**:
-   - Create DocForge project entry in Django Admin
-   - Link to `docforge.nstoug.com` (live demo) and GitHub repo
-   - Write a brief case study: self-correcting loop, stack decisions, interesting challenge
+6. **Portfolio integration**: Create DocForge project entry in Django Admin — link to live demo + GitHub repo; write brief case study (self-correcting loop, LangGraph choice, interesting challenge)
 7. **Smoke test**: Full extraction flow on production URL
 
-**Quality gate**: `curl https://docforge.nstoug.com/api/health` → 200. Full browser flow on production domain.
+**Quality gate**: Full browser flow on `docforge.nstoug.com`. Portfolio entry visible at `nstoug.com`.
 
 ---
 
@@ -788,7 +751,7 @@ Create a project entry in your portfolio's Django Admin:
 | Field | Value |
 |-------|-------|
 | `title` | DocForge — AI Document Intelligence |
-| `primary_link` | `https://github.com/nstoug/docforge` |
+| `primary_link` | `https://github.com/niXtou/docforge` |
 | `primary_link_type` | GITHUB |
 | `secondary_link` | `https://docforge.nstoug.com` |
 | Technologies | Python, FastAPI, LangGraph, Pydantic, Docker, React, TypeScript, PostgreSQL, Redis |
