@@ -16,7 +16,7 @@ jobs:
       - name: Backend — lint, typecheck, tests
         working-directory: backend
         run: |
-          uv sync --frozen
+          uv sync --frozen --extra dev
           uv run ruff check .
           uv run pyright .
           uv run pytest -v
