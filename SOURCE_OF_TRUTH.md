@@ -1,10 +1,10 @@
 # DocForge — Source of Truth
 
-> **Last updated**: 2026-03-19
-> **Status**: Stages 1–4 complete · Stage 5 (Production Config & CI/CD) next
+> **Last updated**: 2026-03-20
+> **Status**: Stages 1–5 complete · Stage 6 (Deployment & Documentation) next
 > **Author**: nstoug
 > **Live demo target**: `docforge.nstoug.com`
-> **Repository**: `github.com/nstoug/docforge`
+> **Repository**: `github.com/niXtou/docforge`
 
 ---
 
@@ -736,18 +736,26 @@ Notable implementation details:
 
 ---
 
-### Stage 5: Docker, Production Config & CI/CD
+### Stage 5: CI/CD + Production Infrastructure ✅ COMPLETE
 
-**Goal**: Production-grade containers, complete `docker-compose.prod.yml`, GitHub Actions CI/CD pipeline.
+**Goal**: Production-grade containers, GitHub Actions CI/CD pipeline, pre-commit hooks.
 
-**Tasks**:
-1. Finalize `docker-compose.prod.yml` (backend + frontend + nginx + db + redis)
-2. Write `nginx/nginx.conf` (TLS termination, proxy to backend, serve frontend static)
-3. Configure GitHub Actions `deploy.yml`: test → build (ARM64) → push GHCR → SSH deploy
-4. Set up `.pre-commit-config.yaml` (ruff, pyright, trailing whitespace)
-5. Verify: `docker compose -f docker-compose.prod.yml up --build` from clean state
+**Completed tasks**:
+1. Created `docker-compose.prod.yml` — backend + frontend + db + redis; frontend joins external `gateway_net` with alias `docforge-frontend`
+2. Created `.github/workflows/deploy.yml` — test → ARM64 build → GHCR push → SSH deploy (3-job pipeline)
+3. Created `.pre-commit-config.yaml` — ruff-format, ruff, pyright, trailing-whitespace, eof-fixer, no-commit-to-branch
+4. Created GitHub repo `niXtou/docforge` (public) and pushed all history
+5. Installed pre-commit hooks via `uv tool install pre-commit`
 
-**Quality gate**: `docker compose up --build` (both configs) succeeds. All services pass health checks. GitHub Actions pipeline runs green.
+**Architecture note — gateway_net**:
+DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/vps-infra` (separate
+private repo). DocForge's frontend container joins the shared `gateway_net` Docker network
+(external, created once by vps-infra) with alias `docforge-frontend`. The vps-infra nginx
+routes `docforge.nstoug.com → docforge-frontend:80`. Lifecycle: add a project → add a server
+block to vps-infra nginx.conf + deploy that project's stack.
+
+**Quality gate**: `docker compose -f docker-compose.prod.yml config` validates clean. All
+pre-commit hooks pass. GitHub Actions pipeline triggers on push to main.
 
 ---
 
