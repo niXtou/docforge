@@ -48,7 +48,7 @@ jobs:
           context: ./backend
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/docforge-backend:latest
+          tags: ghcr.io/nixtou/docforge-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build and push frontend (ARM64)
@@ -57,7 +57,7 @@ jobs:
           context: ./frontend
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/docforge-frontend:latest
+          tags: ghcr.io/nixtou/docforge-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
