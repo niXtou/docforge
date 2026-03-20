@@ -1,0 +1,62 @@
+services:
+  backend:
+    image: ghcr.io/nixtou/docforge-backend:latest
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/api/health',timeout=5); sys.exit(0 if r.status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+    networks: [internal]
+
+  frontend:
+    image: ghcr.io/nixtou/docforge-frontend:latest
+    restart: unless-stopped
+    networks:
+      internal:
+      gateway_net:
+        aliases: [docforge-frontend]   # stable DNS name used in vps-infra nginx.conf
+
+  db:
+    image: postgres:15-alpine
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - docforge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    volumes: [docforge_redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [internal]
+
+volumes:
+  docforge_pgdata:
+  docforge_redisdata:
+
+networks:
+  internal:
+  gateway_net:
+    external: true   # created by vps-infra; must exist before `docker compose up`
