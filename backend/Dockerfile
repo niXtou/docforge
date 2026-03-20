@@ -13,7 +13,7 @@ FROM python:3.12-slim AS builder
 
 # Copy the uv binary from its official image — uv is a fast Python package
 # manager (written in Rust) that replaces pip + venv in this project.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
