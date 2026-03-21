@@ -277,6 +277,6 @@ MIT
 
 ## Author
 
-**Nikos Stougiannis** — [nstoug.com](https://nstoug.com) · [GitHub](https://github.com/niXtou)
+**Nikos Stougiannos** — [nstoug.com](https://nstoug.com) · [GitHub](https://github.com/niXtou)
 
 *Built as a portfolio project demonstrating production-grade AI engineering with LangGraph, FastAPI, and modern Python tooling.*
