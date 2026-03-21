@@ -10,7 +10,7 @@
 
 DocForge extracts structured data from unstructured documents using LLMs. What makes it different from a simple API wrapper:
 
-- **Self-correcting extraction**: A LangGraph workflow validates LLM output against your Pydantic schema. If validation fails, the errors are fed back to the LLM for retry (up to 3 attempts). This is the pattern production AI systems use.
+- **Self-correcting extraction**: A LangGraph workflow validates LLM output against your Pydantic schema. If validation fails, the errors are fed back to the LLM for retry (up to 3 retries). This is the pattern production AI systems use.
 - **Schema-driven**: Define any extraction schema as JSON Schema. The system constructs extraction prompts dynamically.
 - **Multi-provider**: Routes through OpenRouter to Claude, GPT-4o, Gemini, and open-source models. Bring Your Own Key (BYOK) supported.
 - **Real-time streaming**: SSE (Server-Sent Events) shows extraction progress node-by-node as it happens.
@@ -38,6 +38,10 @@ Upload an invoice PDF with the "Invoice" schema selected → get back:
 }
 ```
 
+### Demo
+
+<!-- TODO: add demo.gif — screen recording of full extraction flow -->
+
 ---
 
 ## Architecture
@@ -56,7 +60,7 @@ graph TB
             Extract --> Validate{Pydantic Validation}
             Validate -->|Valid| Merge[Merge Results]
             Validate -->|Invalid + retries left| Extract
-            Validate -->|Failed| Error[Graceful Error]
+            Validate -->|Max retries hit| Merge
         end
         API --> Parse
         Merge --> API
@@ -107,7 +111,7 @@ graph TB
 
 ```bash
 # Clone
-git clone https://github.com/<your-username>/docforge.git
+git clone https://github.com/niXtou/docforge.git
 cd docforge
 
 # Configure
@@ -130,12 +134,29 @@ curl -X POST http://localhost:8000/api/extract \
   -F "file=@sample-invoice.pdf" \
   -F "schema_id=1" \
   -F "model=google/gemini-2.0-flash-001"
+# → {"job_id": "...", "status": "pending", ...}
 
-# Stream progress (SSE)
+# Stream progress node-by-node (SSE)
 curl -N http://localhost:8000/api/extract/{job_id}/stream
+# → event: node_completed  data: {"node": "parse", ...}
+# → event: node_completed  data: {"node": "chunk", ...}
+# → event: node_completed  data: {"node": "extract", ...}
+# → event: node_completed  data: {"node": "validate", ...}
+# → event: node_completed  data: {"node": "merge", ...}
+# → event: done
 
 # Get final result
 curl http://localhost:8000/api/extract/{job_id}/result
+# → {
+#     "job_id": "...",
+#     "status": "completed",
+#     "data": { ... extracted fields ... },
+#     "validation_passed": true,
+#     "retries_used": 0,
+#     "model_used": "google/gemini-2.0-flash-001",
+#     "processing_time_ms": 4821,
+#     "chunks_processed": 1
+#   }
 ```
 
 ---
@@ -183,8 +204,8 @@ docforge/
 │   └── src/
 │       ├── components/   # React UI components
 │       ├── hooks/        # Custom hooks (SSE consumer)
-│       └── api/          # API client
-├── nginx/                # Production reverse proxy
+│       ├── api/          # API client
+│       └── types/        # TypeScript type definitions
 ├── docker-compose.yml    # Local development
 └── docker-compose.prod.yml  # Production
 ```
@@ -197,7 +218,7 @@ docforge/
 
 ```bash
 cd backend
-uv sync                         # Install dependencies
+uv sync --extra dev             # Install dependencies (incl. dev tools)
 uv run pytest -v                # Run tests
 uv run ruff check .             # Lint
 uv run pyright .                # Type check
@@ -227,11 +248,12 @@ pre-commit install              # One-time setup
 
 DocForge is designed for self-hosted deployment on a VPS with Docker Compose. The production setup includes:
 
-- **Nginx** — TLS termination with Cloudflare Origin Certificates
+- **Nginx gateway** — centralized reverse proxy (lives in a separate `hetzner-vps-portfolio-infra` repo) handling TLS termination with Cloudflare Origin Certificates; routes traffic to DocForge containers via a shared Docker network (`gateway_net`)
 - **Docker Compose** — orchestrates backend, frontend, PostgreSQL, and Redis
-- **GitHub Actions** — automated CI/CD on push to `main`
+- **GitHub Actions** — automated CI/CD on push to `main`; tests run on PRs, build+deploy gated to main
+- **Rate limiting** — demo endpoint is rate-limited per hour and restricted to a curated set of low-cost models
 
-See `docker-compose.prod.yml` and `nginx/nginx.conf` for configuration.
+See `docker-compose.prod.yml` for the production stack configuration.
 
 ---
 
@@ -255,6 +277,6 @@ MIT
 
 ## Author
 
-**Nikos Stougiannis** — [nstoug.com](https://nstoug.com) · [GitHub](https://github.com/<your-username>)
+**Nikos Stougiannis** — [nstoug.com](https://nstoug.com) · [GitHub](https://github.com/niXtou)
 
 *Built as a portfolio project demonstrating production-grade AI engineering with LangGraph, FastAPI, and modern Python tooling.*
