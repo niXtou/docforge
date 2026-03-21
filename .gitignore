@@ -33,3 +33,6 @@ Thumbs.db
 
 # Worktrees
 .worktrees/
+
+# Personal study notes (not for repo)
+STUDY_NOTES.md
