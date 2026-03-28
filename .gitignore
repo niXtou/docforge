@@ -36,3 +36,6 @@ Thumbs.db
 
 # Personal study notes (not for repo)
 STUDY_NOTES.md
+
+# AI planning artifacts (session-specific, not for version history)
+docs/superpowers/
