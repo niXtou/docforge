@@ -2,7 +2,9 @@
 
 ## Project overview
 
-DocForge is an AI-powered document intelligence API. Users upload documents, select extraction schemas, and receive structured JSON via a self-correcting LangGraph agent workflow. Monorepo with `backend/` (FastAPI + Python 3.12) and `frontend/` (React 19 + TypeScript + Vite).
+DocForge is an AI-powered document intelligence API. Users upload documents (PDF, CSV, plain text), select extraction schemas, and receive structured validated JSON via a self-correcting LangGraph agent workflow. Monorepo with `backend/` (FastAPI + Python 3.12) and `frontend/` (React 19 + TypeScript + Vite).
+
+**Current status**: All implementation stages complete. Live at `docforge.nstoug.com`. Focus areas going forward: bug fixes, UX improvements, and portfolio polish.
 
 Architecture and data models are defined in `SOURCE_OF_TRUTH.md` — always read it before making structural changes.
 
@@ -96,6 +98,14 @@ frontend/src/
 ```
 
 Key files to read first: `SOURCE_OF_TRUTH.md` (architecture), `backend/app/workflows/graph.py` (core logic), `backend/app/core/config.py` (all settings).
+
+## Demo mode
+
+When `DEMO_MODE=true` (production default), two constraints apply:
+- Model requests are validated against `DEMO_ALLOWED_MODELS` in `config.py` (enforced in `app/core/security.py`)
+- Extraction requests are rate-limited per IP via Redis (10/hour)
+
+BYOK (Bring Your Own Key): clients can pass `X-API-Key` header to bypass demo restrictions and use any OpenRouter-supported model.
 
 ## LangGraph conventions
 
