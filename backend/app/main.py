@@ -106,24 +106,33 @@ _BUILTIN_SCHEMAS = [
 
 
 async def seed_builtin_schemas(session: AsyncSession) -> None:
-    """Insert built-in schemas if they don't already exist.
+    """Insert or update built-in schemas to match the current code definition.
 
-    Checks by name before inserting so re-running on an already-seeded DB is safe.
-    Importable so tests can call it directly without going through the lifespan.
+    Checks by name. If found, updates the description and json_schema to ensure
+    the latest improvements (like new fields) are available in the database.
     """
     for schema_def in _BUILTIN_SCHEMAS:
-        existing = await session.execute(
-            select(ExtractionSchema).where(ExtractionSchema.name == schema_def["name"])
-        )
-        if existing.scalar_one_or_none() is None:
+        stmt = select(ExtractionSchema).where(ExtractionSchema.name == schema_def["name"])
+        existing = (await session.execute(stmt)).scalar_one_or_none()
+
+        if existing is None:
             session.add(
                 ExtractionSchema(
                     name=schema_def["name"],
-                    description=schema_def["description"],
-                    json_schema=schema_def["json_schema"],
+                    description=str(schema_def["description"]),
+                    json_schema=schema_def["json_schema"],  # type: ignore[arg-type]
                     is_builtin=True,
                 )
             )
+            logger.info("Seeded built-in schema: %s", schema_def["name"])
+        else:
+            # Sync existing built-in with code definition
+            schema_obj: ExtractionSchema = existing  # type: ignore[assignment]
+            schema_obj.description = str(schema_def["description"])
+            schema_obj.json_schema = schema_def["json_schema"]  # type: ignore[assignment]
+            schema_obj.is_builtin = True
+            logger.debug("Synchronized built-in schema: %s", schema_def["name"])
+
     await session.commit()
 
 
