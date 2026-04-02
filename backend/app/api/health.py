@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/health")
+@router.get(
+    "/health",
+    summary="Service health check",
+    description="Verifies the operational status of the DocForge API and its connection to the PostgreSQL database.",
+)
 async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     """Return service health including database connectivity.
 

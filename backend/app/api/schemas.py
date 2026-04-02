@@ -12,14 +12,24 @@ from app.models.schemas import SchemaCreate, SchemaResponse
 router = APIRouter()
 
 
-@router.get("", response_model=list[SchemaResponse])
+@router.get(
+    "",
+    response_model=list[SchemaResponse],
+    summary="List all schemas",
+    description="Returns a list of all available extraction schemas, including built-in and custom ones.",
+)
 async def list_schemas(db: AsyncSession = Depends(get_db)) -> list[ExtractionSchema]:
     """Return all extraction schemas."""
     result = await db.execute(select(ExtractionSchema))
     return list(result.scalars().all())
 
 
-@router.get("/{schema_id}", response_model=SchemaResponse)
+@router.get(
+    "/{schema_id}",
+    response_model=SchemaResponse,
+    summary="Get schema by ID",
+    description="Returns a single extraction schema matching the provided ID.",
+)
 async def get_schema(schema_id: int, db: AsyncSession = Depends(get_db)) -> ExtractionSchema:
     """Return a single extraction schema by ID."""
     schema = await db.get(ExtractionSchema, schema_id)
@@ -28,7 +38,16 @@ async def get_schema(schema_id: int, db: AsyncSession = Depends(get_db)) -> Extr
     return schema
 
 
-@router.post("", response_model=SchemaResponse, status_code=201)
+@router.post(
+    "",
+    response_model=SchemaResponse,
+    status_code=201,
+    summary="Create custom schema",
+    description=(
+        "Creates a new custom extraction schema by providing a name, description, "
+        "and a valid JSON Schema. Returns 409 Conflict if a schema with the same name exists."
+    ),
+)
 async def create_schema(
     payload: SchemaCreate, db: AsyncSession = Depends(get_db)
 ) -> ExtractionSchema:

@@ -40,7 +40,8 @@ Upload an invoice PDF with the "Invoice" schema selected → get back:
 
 ### Demo
 
-<!-- TODO: add demo.gif — screen recording of full extraction flow -->
+![DocForge Demo](https://raw.githubusercontent.com/niXtou/docforge/main/docs/assets/demo.gif)
+*A screen recording showing the full extraction flow: document upload, real-time LangGraph node progress, and the final structured JSON results.*
 
 ---
 
@@ -261,11 +262,11 @@ See `docker-compose.prod.yml` for the production stack configuration.
 
 **Why FastAPI over Django?** FastAPI is built on Pydantic — API models, LangGraph state, and extraction schemas all share the same type system. Async-first matters for LLM API calls. Auto-generated OpenAPI docs are a bonus.
 
-**Why LangGraph over raw LangChain agents?** LangGraph provides explicit control over the workflow as a state machine. The self-correcting retry loop (conditional edges based on validation) is a first-class concept in LangGraph, whereas it would be ad-hoc in vanilla LangChain.
+**Why LangGraph over raw LangChain agents?** LangGraph provides explicit control over the workflow as a state machine. The self-correcting retry loop (conditional edges based on validation) is a first-class concept in LangGraph, whereas it would be ad-hoc in vanilla LangChain. In 2026, this remains the gold standard for reliable AI agentic workflows.
 
 **Why OpenRouter?** Single API key routes to 200+ models. Users can switch between Claude, GPT-4o, and Gemini without managing separate credentials. BYOK is trivial — just pass a different key.
 
-**Why self-hosted (not serverless)?** The extraction workflow runs for 5–30 seconds with streaming. This is a poor fit for serverless cold starts and execution limits. A VPS with Docker gives predictable performance and simple debugging.
+**Why self-hosted (not serverless)?** The extraction workflow runs for 5–30 seconds with streaming. This is a poor fit for serverless cold starts and execution limits. A VPS with Docker gives predictable performance, simplified background task management, and easier SSE handling.
 
 ---
 

@@ -22,13 +22,30 @@ router = APIRouter()
 _TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed"}
 
 
-@router.post("", response_model=ExtractionJobResponse, status_code=202)
+@router.post(
+    "",
+    response_model=ExtractionJobResponse,
+    status_code=202,
+    summary="Upload document and start extraction",
+    description=(
+        "Accepts a document upload (PDF, CSV, TXT, MD), saves it to a temporary "
+        "location, and creates a pending extraction job. The actual extraction "
+        "logic starts when the client connects to the SSE streaming endpoint.\n\n"
+        "**Returns 202 Accepted** immediately with a `job_id`."
+    ),
+)
 async def upload_document(
     request: Request,
-    file: UploadFile = File(...),
-    schema_id: int = Form(...),
-    model: str = Form(default="google/gemini-2.0-flash-001"),
-    api_key: str | None = Form(default=None),
+    file: UploadFile = File(..., description="The document file to extract data from."),
+    schema_id: int = Form(..., description="ID of the ExtractionSchema to use."),
+    model: str = Form(
+        default="google/gemini-2.0-flash-001",
+        description="OpenRouter model string (e.g., 'openai/gpt-4o').",
+    ),
+    api_key: str | None = Form(
+        default=None,
+        description="Optional BYOK API key. Bypasses rate limits and whitelist.",
+    ),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_demo_access),
 ) -> ExtractionJobResponse:
@@ -67,7 +84,15 @@ async def upload_document(
     )
 
 
-@router.get("/{job_id}/stream")
+@router.get(
+    "/{job_id}/stream",
+    summary="Stream extraction progress (SSE)",
+    description=(
+        "Establishes a Server-Sent Events (SSE) connection to stream LangGraph "
+        "node transitions and status updates in real-time.\n\n"
+        "Each event is a JSON object matching the `StreamEvent` schema."
+    ),
+)
 async def stream_job(
     job_id: str,
     db: AsyncSession = Depends(get_db),
@@ -102,7 +127,15 @@ async def stream_job(
     return EventSourceResponse(_generate())
 
 
-@router.get("/{job_id}/result", response_model=ExtractionResult)
+@router.get(
+    "/{job_id}/result",
+    response_model=ExtractionResult,
+    summary="Get final extraction result",
+    description=(
+        "Returns the final structured data and processing metadata for a completed job. "
+        "Returns 409 Conflict if the job is still processing."
+    ),
+)
 async def get_result(
     job_id: str,
     db: AsyncSession = Depends(get_db),

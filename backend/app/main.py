@@ -62,10 +62,13 @@ _BUILTIN_SCHEMAS = [
             "properties": {
                 "invoice_number": {"type": "string"},
                 "total_amount": {"type": "number"},
+                "currency": {"type": "string", "description": "ISO 4217 currency code"},
                 "vendor_name": {"type": "string"},
+                "tax_id": {"type": "string", "description": "VAT/GST or Tax ID of the vendor"},
                 "invoice_date": {"type": "string"},
+                "billing_address": {"type": "string"},
             },
-            "required": ["invoice_number", "total_amount"],
+            "required": ["invoice_number", "total_amount", "vendor_name"],
         },
     },
     {
@@ -77,6 +80,9 @@ _BUILTIN_SCHEMAS = [
                 "full_name": {"type": "string"},
                 "email": {"type": "string"},
                 "phone": {"type": "string"},
+                "linkedin_url": {"type": "string"},
+                "github_url": {"type": "string"},
+                "years_of_experience": {"type": "integer"},
                 "skills": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["full_name"],
@@ -148,12 +154,28 @@ def create_app() -> FastAPI:
     makes it easy to create test instances with different settings.
     """
     app = FastAPI(
-        title="DocForge",
-        description="AI-powered document intelligence API",
+        title="DocForge — AI Document Intelligence",
+        description=(
+            "**DocForge** is an AI-powered document intelligence API. It uses "
+            "agentic, self-correcting LangGraph workflows to extract structured JSON "
+            "from unstructured documents (PDF, CSV, TXT).\n\n"
+            "### Core Features\n"
+            "- **Self-Correcting Loop**: Automated Pydantic validation with LLM retries.\n"
+            "- **Real-time Streaming**: SSE events from LangGraph node transitions.\n"
+            "- **Multi-provider**: Unified access to Claude, GPT-4o, and Gemini via OpenRouter.\n"
+            "- **BYOK**: Bring Your Own Key support per request."
+        ),
         version="0.1.0",
         docs_url="/docs",  # Swagger UI — http://localhost:8000/docs
         redoc_url="/redoc",  # ReDoc UI  — http://localhost:8000/redoc
         lifespan=lifespan,
+        contact={
+            "name": "Nikos Stougiannos",
+            "url": "https://nstoug.com",
+        },
+        license_info={
+            "name": "MIT",
+        },
     )
 
     # CORS (Cross-Origin Resource Sharing): browsers block requests from one
