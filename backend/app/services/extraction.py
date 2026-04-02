@@ -30,11 +30,7 @@ JOB LIFECYCLE — SSE PATH (stream_extraction / _run_extraction_task)
   Background task is NOT cancelled if the client disconnects — it
   commits results independently so the job is always finalisable.
 
-JOB LIFECYCLE — SYNC PATH (run_extraction)
-───────────────────────────────────────────
-  Used by non-SSE callers. Runs ainvoke() inline and commits once.
-
-FLUSH VS COMMIT (sync path only)
+FLUSH VS COMMIT
 ──────────────────────────────────
 `db.flush()` sends SQL to Postgres but does NOT commit the transaction.
 The row is visible to the current session (so we can update it), but no
@@ -55,104 +51,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.db import ExtractionJob, ExtractionSchema
-from app.models.schemas import ExtractionResult, StreamEvent
+from app.models.schemas import StreamEvent
 from app.workflows.graph import compiled_graph
 from app.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
-
-
-async def run_extraction(
-    job_id: str,
-    file_path: str,
-    file_type: str,
-    original_filename: str,
-    schema: ExtractionSchema,
-    model: str,
-    api_key: str | None,
-    db: AsyncSession,
-) -> ExtractionResult:
-    """Run the extraction pipeline for a document.
-
-    Args:
-        job_id: UUID string for this extraction job.
-        file_path: Absolute path to the temp file.
-        file_type: File extension (e.g. ".pdf").
-        original_filename: Original uploaded filename.
-        schema: ExtractionSchema ORM object.
-        model: OpenRouter model string.
-        api_key: BYOK API key or None.
-        db: Async database session.
-
-    Returns:
-        ExtractionResult with all job metadata.
-    """
-    # 1. Insert the job record as "pending" so it's immediately visible to
-    #    status-polling endpoints, even before processing starts.
-    job = ExtractionJob(
-        id=job_id,
-        schema_id=schema.id,
-        status="pending",
-        original_filename=original_filename,
-        file_type=file_type,
-        model_used=model,
-    )
-    db.add(job)
-    await db.flush()  # write to DB without committing — see module docstring
-
-    # 2. Build the initial state that the workflow graph will use.
-    #    schema.json_schema is the JSON Schema dict that tells the LLM what to extract.
-    state = WorkflowState(
-        document_id=job_id,
-        file_path=file_path,
-        file_type=file_type,
-        schema_definition=schema.json_schema,
-        model=model,
-        api_key=api_key,
-    )
-
-    # 3. Mark as processing before handing off to the graph
-    job.status = "processing"
-    await db.flush()
-
-    # 4. Run the LangGraph workflow.
-    #    state.model_dump() converts the Pydantic model to a plain dict — LangGraph
-    #    requires this format and reconstructs a typed WorkflowState internally.
-    time_start = time.monotonic()
-    try:
-        result_state: dict = await compiled_graph.ainvoke(state.model_dump())  # type: ignore[assignment]
-
-        elapsed_ms = int((time.monotonic() - time_start) * 1000)
-
-        # Write all results from the final WorkflowState back into the DB record
-        job.status = result_state.get("status", "completed")
-        job.result_data = result_state.get("final_result")
-        job.validation_passed = not bool(result_state.get("last_validation_errors"))
-        job.retries_used = result_state.get("retry_count", 0)
-        job.processing_time_ms = elapsed_ms
-        job.chunks_processed = len(result_state.get("chunks", []))
-        job.completed_at = datetime.now(UTC).replace(tzinfo=None)  # TIMESTAMP WITHOUT TIME ZONE
-
-        await db.commit()  # persist everything in one transaction
-
-    except Exception as e:
-        # If anything in the graph raised, mark the job as failed and re-raise
-        # so the route handler can return an appropriate HTTP error.
-        job.status = "failed"
-        job.error_message = str(e)
-        await db.commit()
-        raise
-
-    return ExtractionResult(
-        job_id=job_id,
-        status=job.status,
-        data=job.result_data,
-        validation_passed=bool(job.validation_passed),
-        retries_used=job.retries_used or 0,
-        model_used=job.model_used,
-        processing_time_ms=job.processing_time_ms or 0,
-        chunks_processed=job.chunks_processed or 0,
-    )
 
 
 async def create_job(
@@ -200,6 +103,8 @@ async def _run_extraction_task(
     """
     final_state: dict[str, object] = {}
     time_start = time.monotonic()
+    prefix = f"[Job {job_id}]"
+
     async with AsyncSessionLocal() as task_db:
         try:
             async for update in compiled_graph.astream(
@@ -208,6 +113,7 @@ async def _run_extraction_task(
             ):
                 for node_name, node_output in update.items():
                     final_state.update(node_output)  # type: ignore[arg-type]
+                    logger.debug("%s Node '%s' completed", prefix, node_name)
                     await queue.put(
                         StreamEvent(
                             event="node_completed",
@@ -231,9 +137,10 @@ async def _run_extraction_task(
                     tzinfo=None
                 )  # TIMESTAMP WITHOUT TIME ZONE
                 await task_db.commit()
-                logger.info("Extraction job %s completed with status: %s", job_id, job.status)
+                logger.info("%s Completed with status: %s", prefix, job.status)
             else:
-                logger.warning("Extraction job %s not found in DB after graph completed", job_id)
+                logger.warning("%s Job not found in DB after graph completed", prefix)
+
             await queue.put(
                 StreamEvent(
                     event="done",
@@ -244,7 +151,7 @@ async def _run_extraction_task(
                 )
             )
         except Exception as e:
-            logger.exception("Extraction job %s failed: %s", job_id, e)
+            logger.exception("%s Failed: %s", prefix, e)
             try:
                 job = await task_db.get(ExtractionJob, job_id)
                 if job is not None:
@@ -252,7 +159,8 @@ async def _run_extraction_task(
                     job.error_message = str(e)
                     await task_db.commit()
             except Exception:
-                logger.exception("Failed to mark job %s as failed", job_id)
+                logger.exception("%s Failed to mark job as failed", prefix)
+
             await queue.put(
                 StreamEvent(
                     event="error",
@@ -262,10 +170,23 @@ async def _run_extraction_task(
                 )
             )
         finally:
-            # Signal the SSE generator that we're done
+            # 1. Clear sensitive api_key from DB now that job is terminal
+            try:
+                job = await task_db.get(ExtractionJob, job_id)
+                if job and job.api_key:
+                    job.api_key = None
+                    await task_db.commit()
+                    logger.debug("%s Sensitive api_key purged from DB", prefix)
+            except Exception:
+                logger.warning("%s Failed to purge api_key", prefix)
+
+            # 2. Signal the SSE generator that we're done
             await queue.put(None)
+
+            # 3. Clean up temp file
             if file_path:
                 Path(file_path).unlink(missing_ok=True)
+                logger.debug("%s Temp file unlinked: %s", prefix, file_path)
 
 
 async def stream_extraction(

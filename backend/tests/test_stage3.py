@@ -1,5 +1,6 @@
 """Stage 3 tests: schema CRUD and extraction endpoints."""
 
+import asyncio
 import io
 import uuid
 from datetime import UTC, datetime
@@ -222,6 +223,53 @@ async def test_stream_emits_node_events(
     body = response.text
     assert "node_completed" in body
     assert "done" in body
+
+
+async def test_api_key_purged_after_stream(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """The api_key is cleared from the DB after the extraction task completes."""
+    import tempfile
+
+    from tests.conftest import TestSessionLocal
+
+    job_id = str(uuid.uuid4())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+        f.write(b"content")
+        tmp_path = f.name
+
+    job = ExtractionJob(
+        id=job_id,
+        schema_id=seeded_schema.id,
+        status="pending",
+        original_filename="test.txt",
+        file_type=".txt",
+        model_used="google/gemini-2.0-flash-001",
+        file_path=tmp_path,
+        api_key="sk-secret-key",
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    # Verify key exists before
+    await db_session.refresh(job)
+    assert job.api_key == "sk-secret-key"
+
+    async def _fake_astream(*args: object, **kwargs: object):  # type: ignore[override]
+        yield {"parse": {"raw_content": "done"}}
+
+    with patch("app.services.extraction.compiled_graph") as mock_graph:
+        mock_graph.astream = _fake_astream
+        with patch("app.services.extraction.AsyncSessionLocal", TestSessionLocal):
+            # Consuming the stream triggers the background task
+            response = await client.get(f"/api/extract/{job_id}/stream")
+            assert response.status_code == 200
+            # Wait a bit for the background task's finally block to run
+            await asyncio.sleep(0.1)
+
+    # Verify key is cleared after
+    await db_session.refresh(job)
+    assert job.api_key is None
 
 
 async def test_stream_already_done_job(

@@ -38,14 +38,14 @@ export function Layout({ children }: LayoutProps) {
         <div className="max-w-5xl mx-auto px-4 text-center text-sm text-zinc-600">
           Built by{' '}
           <a
-            href="https://nstoug.com"
+            href="https://www.nstoug.com"
             className="text-zinc-400 hover:text-zinc-200 transition-colors"
           >
             nstoug
-          </a>
+          </a> and AI
           {' · '}
           <a
-            href="https://github.com/nstoug/docforge"
+            href="https://github.com/niXtou/docforge"
             className="text-zinc-400 hover:text-zinc-200 transition-colors"
           >
             GitHub
