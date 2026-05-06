@@ -114,6 +114,7 @@ Each project joins the shared `gateway_net` Docker network with a stable alias. 
                     ┌────▼─────┐
                     │ extract  │  ← LLM call: prompt + schema → structured output
                     │          │    Uses .with_structured_output(json_schema)
+                    │          │    (prepends "ExtractionResult" title to schema)
                     └────┬─────┘
                          │
                     ┌────▼──────┐
@@ -235,8 +236,8 @@ dependencies = [
     "pydantic-settings>=2.3.0",
 
     # Document Processing
-    "pypdf>=4.0.0",                 # PDF text extraction
-    "python-docx>=1.0.0",           # DOCX support (Stage 4+)
+    "pymupdf4llm>=0.0.17",          # PDF → Markdown (high-fidelity)
+    "python-docx>=1.0.0",           # DOCX support
 
     # Utilities
     "httpx>=0.27.0",

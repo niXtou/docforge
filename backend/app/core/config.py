@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     )
 
     # ── Redis ─────────────────────────────────────────────────────────────────
-    redis_url: str = Field(default="redis://localhost:6379/0")  # used for job queuing (Stage 4+)
+    redis_url: str = Field(default="redis://localhost:6379/0")  # used for job queuing
 
     # ── LLM Providers ─────────────────────────────────────────────────────────
     # All LLM calls go through OpenRouter, which is a unified gateway for models
