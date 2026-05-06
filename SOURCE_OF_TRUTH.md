@@ -1,7 +1,7 @@
 # DocForge — Source of Truth
 
 > **Last updated**: 2026-03-20
-> **Status**: Stages 1–5 complete + production hardening · Stage 6 (README & portfolio integration) next
+> **Status**: Stages 1–6 complete + production hardening
 > **Author**: nstoug
 > **Live demo target**: `docforge.nstoug.com`
 > **Repository**: `github.com/niXtou/docforge`
@@ -725,7 +725,7 @@ DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/hetzn
 
 ---
 
-### Stage 6: README & Portfolio Integration
+### Stage 6: README & Portfolio Integration ✅ COMPLETE
 
 **Goal**: Polished README, portfolio entry, full smoke test.
 
@@ -734,9 +734,9 @@ DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/hetzn
 2. ~~**SSL**: Cloudflare Origin Certificate (`*.nstoug.com` wildcard)~~ ✅ Done
 3. ~~**VPS setup**: deploy compose stack, run migrations~~ ✅ Done
 4. ~~**Nginx gateway**: `docforge.nstoug.com` server block in hetzner-vps-portfolio-infra~~ ✅ Done
-5. **README.md**: Architecture diagram (Mermaid), quick start, API reference, demo GIF
-6. **Portfolio integration**: Create DocForge project entry in Django Admin — link to live demo + GitHub repo; write brief case study (self-correcting loop, LangGraph choice, interesting challenge)
-7. **Smoke test**: Full extraction flow on production URL
+5. ~~**README.md**: Architecture diagram (Mermaid), quick start, API reference, demo GIF~~ ✅ Done
+6. ~~**Portfolio integration**: Create DocForge project entry in Django Admin — link to live demo + GitHub repo; write brief case study (self-correcting loop, LangGraph choice, interesting challenge)~~ ✅ Done
+7. ~~**Smoke test**: Full extraction flow on production URL~~ ✅ Done
 
 **Quality gate**: Full browser flow on `docforge.nstoug.com`. Portfolio entry visible at `nstoug.com`.
 
