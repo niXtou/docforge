@@ -1,7 +1,7 @@
 # DocForge — Source of Truth
 
 > **Last updated**: 2026-03-20
-> **Status**: Stages 1–5 complete + production hardening · Stage 6 (README & portfolio integration) next
+> **Status**: Stages 1–6 complete + production hardening
 > **Author**: nstoug
 > **Live demo target**: `docforge.nstoug.com`
 > **Repository**: `github.com/niXtou/docforge`
@@ -114,6 +114,7 @@ Each project joins the shared `gateway_net` Docker network with a stable alias. 
                     ┌────▼─────┐
                     │ extract  │  ← LLM call: prompt + schema → structured output
                     │          │    Uses .with_structured_output(json_schema)
+                    │          │    (prepends "ExtractionResult" title to schema)
                     └────┬─────┘
                          │
                     ┌────▼──────┐
@@ -235,8 +236,8 @@ dependencies = [
     "pydantic-settings>=2.3.0",
 
     # Document Processing
-    "pypdf>=4.0.0",                 # PDF text extraction
-    "python-docx>=1.0.0",           # DOCX support (Stage 4+)
+    "pymupdf4llm>=0.0.17",          # PDF → Markdown (high-fidelity)
+    "python-docx>=1.0.0",           # DOCX support
 
     # Utilities
     "httpx>=0.27.0",
@@ -725,7 +726,7 @@ DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/hetzn
 
 ---
 
-### Stage 6: README & Portfolio Integration
+### Stage 6: README & Portfolio Integration ✅ COMPLETE
 
 **Goal**: Polished README, portfolio entry, full smoke test.
 
@@ -734,9 +735,9 @@ DocForge does **not** own ports 80/443. The gateway nginx lives in `niXtou/hetzn
 2. ~~**SSL**: Cloudflare Origin Certificate (`*.nstoug.com` wildcard)~~ ✅ Done
 3. ~~**VPS setup**: deploy compose stack, run migrations~~ ✅ Done
 4. ~~**Nginx gateway**: `docforge.nstoug.com` server block in hetzner-vps-portfolio-infra~~ ✅ Done
-5. **README.md**: Architecture diagram (Mermaid), quick start, API reference, demo GIF
-6. **Portfolio integration**: Create DocForge project entry in Django Admin — link to live demo + GitHub repo; write brief case study (self-correcting loop, LangGraph choice, interesting challenge)
-7. **Smoke test**: Full extraction flow on production URL
+5. ~~**README.md**: Architecture diagram (Mermaid), quick start, API reference, demo GIF~~ ✅ Done
+6. ~~**Portfolio integration**: Create DocForge project entry in Django Admin — link to live demo + GitHub repo; write brief case study (self-correcting loop, LangGraph choice, interesting challenge)~~ ✅ Done
+7. ~~**Smoke test**: Full extraction flow on production URL~~ ✅ Done
 
 **Quality gate**: Full browser flow on `docforge.nstoug.com`. Portfolio entry visible at `nstoug.com`.
 
