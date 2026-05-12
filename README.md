@@ -38,11 +38,6 @@ Upload an invoice PDF with the "Invoice" schema selected → get back:
 }
 ```
 
-### Demo
-
-![DocForge Demo](https://raw.githubusercontent.com/niXtou/docforge/main/docs/assets/demo.gif)
-*A screen recording showing the full extraction flow: document upload, real-time LangGraph node progress, and the final structured JSON results.*
-
 ---
 
 ## Architecture
@@ -124,7 +119,7 @@ docker compose up --build
 
 # Access
 # API:      http://localhost:8000/docs
-# Frontend: http://localhost:3000
+# Frontend: http://localhost:5173
 ```
 
 ### Test the extraction API
@@ -230,7 +225,7 @@ uv run pyright .                # Type check
 ```bash
 cd frontend
 npm install
-npm run dev                     # Dev server on :3000
+npm run dev                     # Dev server on :5173
 npm run test                    # Vitest
 npm run build                   # Production build
 ```
