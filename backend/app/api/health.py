@@ -3,7 +3,7 @@
 import logging
 
 import sqlalchemy.exc
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,3 +37,8 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
         "database": db_status,
         "version": "0.1.0",
     }
+
+
+@router.head("/health")
+async def health_check_head() -> Response:
+    return Response(status_code=200)
