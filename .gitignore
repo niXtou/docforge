@@ -37,8 +37,6 @@ Thumbs.db
 # Personal study notes (not for repo)
 STUDY_NOTES.md
 
-# AI development context — local only, not for public repo
-AGENTS.md
-CLAUDE.md
-SOURCE_OF_TRUTH.md
+# Local working context (Claude Code cache, scratch notes)
 docs/superpowers/
+.claude/
