@@ -24,11 +24,12 @@ jobs:
           uv run ruff check .
           uv run pyright .
           uv run pytest -v
-      - name: Frontend — lint, tests
+      - name: Frontend — lint, build, tests
         working-directory: frontend
         run: |
           npm ci
           npm run lint
+          npm run build
           npm run test -- --run
 
   build-push:
