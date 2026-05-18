@@ -6,9 +6,9 @@ OpenRouter (openrouter.ai) is a unified API gateway that lets you access models
 from Anthropic, OpenAI, Google, and others through a single endpoint and API key.
 
 Model strings follow the format "provider/model-name", e.g.:
-  "google/gemini-2.0-flash-001"
-  "openai/gpt-4o-mini"
-  "anthropic/claude-sonnet-4.5"
+  "google/gemini-3.1-flash-lite"
+  "openai/gpt-5.4-nano"
+  "anthropic/claude-haiku-4.5"
 
 We use the official `langchain-openrouter` package (first-party LangChain
 integration released March 2026) which natively supports OpenRouter's features
@@ -27,14 +27,14 @@ from app.core.config import settings
 
 
 def get_llm(
-    model: str = "google/gemini-2.0-flash-001",
+    model: str = "google/gemini-3.1-flash-lite",
     api_key: str | None = None,
     temperature: float = 0.0,
 ) -> ChatOpenRouter:
     """Return a ChatOpenRouter instance for the given model.
 
     Args:
-        model: OpenRouter model string (e.g. "google/gemini-2.0-flash-001").
+        model: OpenRouter model string (e.g. "google/gemini-3.1-flash-lite").
         api_key: BYOK API key; falls back to the server's key if None.
         temperature: Sampling temperature. 0.0 means deterministic output,
             which is what we want for structured data extraction.

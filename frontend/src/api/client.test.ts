@@ -44,7 +44,7 @@ describe('uploadDocument', () => {
     const result = await uploadDocument({
       file,
       schemaId: 1,
-      model: 'google/gemini-2.0-flash-001',
+      model: 'google/gemini-3.1-flash-lite',
       apiKey: null,
     })
 
@@ -76,9 +76,10 @@ describe('getResult', () => {
       data: { invoice_number: 'INV-001' },
       validation_passed: true,
       retries_used: 0,
-      model_used: 'google/gemini-2.0-flash-001',
+      model_used: 'google/gemini-3.1-flash-lite',
       processing_time_ms: 1200,
       chunks_processed: 1,
+      error_message: null,
     }
     mockFetch(result)
     expect(await getResult('abc')).toEqual(result)
