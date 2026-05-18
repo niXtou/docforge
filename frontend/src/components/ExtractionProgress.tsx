@@ -1,14 +1,46 @@
+import { useEffect, useMemo, useRef } from 'react'
 import type { StreamEvent } from '../types'
 import type { SSEStatus } from '../hooks/useSSE'
 
-// The fixed node execution order (matches graph.py)
 const NODES = [
-  { id: 'parse',    label: 'Parse',    description: 'Reading document' },
-  { id: 'chunk',    label: 'Chunk',    description: 'Splitting text' },
-  { id: 'extract',  label: 'Extract',  description: 'LLM extraction' },
-  { id: 'validate', label: 'Validate', description: 'Checking fields' },
-  { id: 'merge',    label: 'Merge',    description: 'Finalizing result' },
+  { id: 'parse',    label: 'parse' },
+  { id: 'chunk',    label: 'chunk' },
+  { id: 'extract',  label: 'extract' },
+  { id: 'validate', label: 'validate' },
+  { id: 'merge',    label: 'merge' },
 ] as const
+
+type NodeId = (typeof NODES)[number]['id']
+
+const MAX_RETRIES = 3
+const STICK_THRESHOLD_PX = 24
+
+type RowState = 'done' | 'active' | 'pending' | 'success' | 'error'
+
+interface LogRow {
+  key: string
+  bullet: '▸' | '●' | '✓' | '✕' | '·'
+  offset: string
+  node: string
+  message: string
+  state: RowState
+}
+
+const ROW_TEXT: Record<RowState, string> = {
+  done: 'text-[var(--color-ink-secondary)]',
+  active: 'text-[var(--color-ember-200)]',
+  pending: 'text-[var(--color-ink-quaternary)]',
+  success: 'text-[var(--color-ember-400)]',
+  error: 'text-[var(--color-rust-400)]',
+}
+
+const ROW_BULLET: Record<RowState, string> = {
+  done: 'text-[var(--color-ink-tertiary)]',
+  active: 'text-[var(--color-ember-500)] ember-pulse',
+  pending: 'text-[var(--color-ink-quaternary)]',
+  success: 'text-[var(--color-ember-500)]',
+  error: 'text-[var(--color-rust-500)]',
+}
 
 interface Props {
   events: StreamEvent[]
@@ -16,112 +48,181 @@ interface Props {
   error: string | null
 }
 
-export function ExtractionProgress({ events, status, error }: Props) {
-  // Collect which nodes have completed and count retries (validate > 1)
-  const completedNodes = new Set(
-    events.filter((e) => e.event === 'node_completed' && e.node).map((e) => e.node!),
-  )
-  const retryCount = events.filter((e) => e.event === 'node_completed' && e.node === 'validate').length - 1
+function formatOffset(ms: number): string {
+  const totalSeconds = ms / 1000
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0')
+  const s = (totalSeconds % 60).toFixed(1).padStart(4, '0')
+  return `+${m}:${s}`
+}
 
-  const isActiveNode = (nodeId: string): boolean => {
-    if (status === 'streaming') {
-      // The active node is the one immediately after the last completed node
-      const completedOrder = NODES.map((n) => n.id).filter((id) => completedNodes.has(id))
-      const lastCompleted = completedOrder.at(-1)
-      if (!lastCompleted) return nodeId === 'parse'
-      const lastIndex = NODES.findIndex((n) => n.id === lastCompleted)
-      return NODES[lastIndex + 1]?.id === nodeId
-    }
-    return false
+interface DerivedLog {
+  rows: LogRow[]
+  activeNode: NodeId | null
+  retryCount: number
+}
+
+function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null): DerivedLog {
+  const nodeEvents = events.filter((e) => e.event === 'node_completed' && e.node)
+  const doneEvent = events.find((e) => e.event === 'done') ?? null
+  const errorMsg = events.find((e) => e.event === 'error')?.message ?? error
+
+  const t0 = events[0] ? new Date(events[0].timestamp).getTime() : null
+  const completed = new Set<string>(nodeEvents.map((e) => e.node!))
+  const retryCount = nodeEvents.filter((e) => e.node === 'validate').length - 1
+
+  const activeNode: NodeId | null =
+    status === 'streaming' || status === 'connecting'
+      ? NODES.find((n) => !completed.has(n.id))?.id ?? null
+      : null
+
+  const rows: LogRow[] = []
+
+  nodeEvents.forEach((e, i) => {
+    const offset = t0 !== null ? formatOffset(new Date(e.timestamp).getTime() - t0) : '+00:00.0'
+    rows.push({
+      key: `node-${i}-${e.node}`,
+      bullet: '▸',
+      offset,
+      node: e.node!,
+      message: e.message,
+      state: 'done',
+    })
+  })
+
+  if (activeNode && !doneEvent && status !== 'error') {
+    rows.push({
+      key: `active-${activeNode}`,
+      bullet: '●',
+      // Render an empty timestamp slot — the active offset would otherwise change
+      // every render via Date.now() and churn React reconciliation for no reason.
+      offset: '         ',
+      node: activeNode,
+      message: status === 'connecting' ? 'connecting…' : 'running…',
+      state: 'active',
+    })
   }
 
+  if (doneEvent) {
+    const offset = t0 !== null ? formatOffset(new Date(doneEvent.timestamp).getTime() - t0) : ''
+    rows.push({
+      key: 'done',
+      bullet: '✓',
+      offset,
+      node: 'done',
+      message: doneEvent.message || 'extraction complete',
+      state: 'success',
+    })
+  } else if (status === 'error') {
+    rows.push({
+      key: 'error',
+      bullet: '✕',
+      offset: '',
+      node: 'error',
+      message: errorMsg || 'extraction failed',
+      state: 'error',
+    })
+  }
+
+  if (!doneEvent && status !== 'error') {
+    for (const n of NODES) {
+      if (!completed.has(n.id) && n.id !== activeNode) {
+        rows.push({
+          key: `pending-${n.id}`,
+          bullet: '·',
+          offset: '         ',
+          node: n.label,
+          message: '—',
+          state: 'pending',
+        })
+      }
+    }
+  }
+
+  return { rows, activeNode, retryCount }
+}
+
+export function ExtractionProgress({ events, status, error }: Props) {
+  const logRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+
+  const { rows, activeNode, retryCount } = useMemo(
+    () => buildLog(events, status, error),
+    [events, status, error],
+  )
+
+  const onScroll = () => {
+    const el = logRef.current
+    if (!el) return
+    stickToBottomRef.current = el.scrollHeight - (el.scrollTop + el.clientHeight) < STICK_THRESHOLD_PX
+  }
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return
+    const el = logRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [rows.length])
+
+  const sweepActive = status === 'streaming' || status === 'connecting'
+  const headerLabel = status === 'done' ? 'done' : status === 'error' ? 'failed' : activeNode ?? 'starting'
+  const headerDot =
+    status === 'done'
+      ? 'bg-[var(--color-ember-400)]'
+      : status === 'error'
+      ? 'bg-[var(--color-rust-400)]'
+      : 'bg-[var(--color-ember-500)] ember-pulse'
+
   return (
-    <div className="space-y-6">
-      {/* Status banner */}
-      <div className="flex items-center gap-3">
-        {status === 'done' ? (
-          <div className="flex items-center gap-2 text-emerald-400">
-            <span className="text-lg">✓</span>
-            <span className="font-medium">Extraction complete</span>
-          </div>
+    <div className="relative card-panel overflow-hidden">
+      <div className="absolute top-0 left-0 right-0 h-px">
+        {sweepActive ? (
+          <div className="h-full ember-sweep" />
+        ) : status === 'done' ? (
+          <div className="h-full bg-[var(--color-ember-500)]/60" />
         ) : status === 'error' ? (
-          <div className="flex items-center gap-2 text-red-400">
-            <span className="text-lg">✕</span>
-            <span className="font-medium">{error ?? 'Extraction failed'}</span>
-          </div>
+          <div className="h-full bg-[var(--color-rust-500)]/60" />
         ) : (
-          <div className="flex items-center gap-2 text-indigo-400">
-            <span className="animate-spin text-lg">⟳</span>
-            <span className="font-medium">Extracting…</span>
-          </div>
+          <div className="h-full bg-[var(--color-hairline)]" />
         )}
+      </div>
+
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-hairline">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className={`inline-block w-1.5 h-1.5 rounded-full ${headerDot}`} />
+          <span className="mono-cap text-[var(--color-ink-secondary)]">{headerLabel}</span>
+        </div>
+
         {retryCount > 0 && (
-          <span className="ml-auto text-xs bg-amber-950 text-amber-400 border border-amber-800 rounded-full px-2.5 py-0.5">
-            {retryCount} retr{retryCount === 1 ? 'y' : 'ies'}
+          <span className="mono-cap-sm text-[var(--color-amber-400)] border border-[var(--color-amber-400)]/30 rounded px-2 py-0.5">
+            retried · {retryCount} of {MAX_RETRIES}
           </span>
         )}
       </div>
 
-      {/* Node stepper */}
-      <div className="space-y-2">
-        {NODES.map((node, i) => {
-          const done = completedNodes.has(node.id)
-          const active = isActiveNode(node.id)
-
+      <div
+        ref={logRef}
+        onScroll={onScroll}
+        className="font-mono text-[13px] leading-[1.7] px-5 py-4 max-h-[420px] overflow-y-auto"
+      >
+        {rows.map((row, i) => {
+          const isLast = i === rows.length - 1
           return (
             <div
-              key={node.id}
-              className={`flex items-center gap-3 rounded-lg px-4 py-3 transition-all
-                ${done ? 'bg-emerald-950/40 border border-emerald-900' :
-                  active ? 'bg-indigo-950/40 border border-indigo-800 animate-pulse' :
-                  'bg-zinc-900 border border-zinc-800'}`}
+              key={row.key}
+              className={`grid grid-cols-[1ch_minmax(0,7ch)_minmax(0,12ch)_1fr] gap-x-3 ${ROW_TEXT[row.state]} ${
+                row.state !== 'pending' && isLast ? 'row-enter' : ''
+              }`}
             >
-              {/* Step number / icon */}
-              <div
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-medium flex-shrink-0
-                  ${done ? 'bg-emerald-600 text-white' :
-                    active ? 'bg-indigo-600 text-white' :
-                    'bg-zinc-800 text-zinc-500'}`}
-              >
-                {done ? '✓' : i + 1}
-              </div>
-
-              {/* Label */}
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${done ? 'text-emerald-300' : active ? 'text-indigo-300' : 'text-zinc-500'}`}>
-                  {node.label}
-                </p>
-                <p className={`text-xs ${done ? 'text-emerald-600' : active ? 'text-indigo-600' : 'text-zinc-700'}`}>
-                  {node.description}
-                </p>
-              </div>
-
-              {/* Status indicator */}
-              <span className="text-xs">
-                {done ? <span className="text-emerald-500">done</span> :
-                 active ? <span className="text-indigo-400">running</span> :
-                 <span className="text-zinc-700">–</span>}
-              </span>
+              <span className={`select-none ${ROW_BULLET[row.state]}`}>{row.bullet}</span>
+              <span className="text-[var(--color-ink-quaternary)] whitespace-pre">{row.offset}</span>
+              <span className="truncate">{row.node}</span>
+              <span className="truncate">{row.message}</span>
             </div>
           )
         })}
+        {rows.length === 0 && (
+          <div className="text-[var(--color-ink-tertiary)] italic">connecting to stream…</div>
+        )}
       </div>
-
-      {/* Live event log (last 5 messages) */}
-      {events.length > 0 && (
-        <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3">
-          <p className="text-xs text-zinc-600 mb-2 font-mono uppercase tracking-wider">Event log</p>
-          <div className="space-y-1 max-h-28 overflow-y-auto">
-            {events.slice(-5).map((e, i) => (
-              <p key={i} className="text-xs font-mono text-zinc-500">
-                <span className="text-zinc-700">{new Date(e.timestamp).toLocaleTimeString()}</span>
-                {' · '}
-                {e.message}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

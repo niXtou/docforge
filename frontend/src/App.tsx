@@ -8,18 +8,34 @@ import { ApiKeyInput } from './components/ApiKeyInput'
 import { DocumentUpload } from './components/DocumentUpload'
 import { ExtractionProgress } from './components/ExtractionProgress'
 import { ResultsViewer } from './components/ResultsViewer'
-import type { Schema, ExtractionResult } from './types'
+import { DEMO_MODELS, type Schema, type ExtractionResult } from './types'
 
 type Step = 'configure' | 'streaming' | 'done'
 
+const HOW_IT_WORKS = [
+  {
+    n: '01',
+    label: 'Configure',
+    body: 'Pick a schema, pick a model, optionally bring your own key.',
+  },
+  {
+    n: '02',
+    label: 'Extract',
+    body: 'The agent streams its reasoning over SSE as it works.',
+  },
+  {
+    n: '03',
+    label: 'Validate',
+    body: "Output is parsed against your Pydantic schema. Failures trigger a retry, up to three.",
+  },
+] as const
+
 export default function App() {
-  // ── Form state ──────────────────────────────────────────────────────────────
   const [schema, setSchema] = useState<Schema | null>(null)
-  const [model, setModel] = useState('google/gemini-3.1-flash-lite')
+  const [model, setModel] = useState<string>(DEMO_MODELS[0].id)
   const [apiKey, setApiKey] = useState('')
   const [file, setFile] = useState<File | null>(null)
 
-  // ── Wizard state ────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>('configure')
   const [sseUrl, setSseUrl] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -27,11 +43,9 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  // ── SSE hook ────────────────────────────────────────────────────────────────
   const { events, status: sseStatus, error: sseError, reset: resetSSE } = useSSE(sseUrl)
 
-  // When SSE signals done, fetch the final result.
-  // useRef guard prevents double-invocation in React 19 strict mode.
+  // Guards against React 19 strict-mode double-invocation of the done effect.
   const resultFetchedRef = useRef(false)
   useEffect(() => {
     if (sseStatus === 'done' && step === 'streaming' && jobId && !resultFetchedRef.current) {
@@ -47,7 +61,6 @@ export default function App() {
     }
   }, [sseStatus, step, jobId])
 
-  // ── Submit handler ──────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!schema || !file) return
@@ -63,8 +76,7 @@ export default function App() {
         apiKey: apiKey || null,
       })
       setJobId(job.job_id)
-      const url = streamUrl(job.job_id)
-      setSseUrl(url)
+      setSseUrl(streamUrl(job.job_id))
       setStep('streaming')
     } catch (err) {
       setSubmitError((err as Error).message)
@@ -73,7 +85,6 @@ export default function App() {
     }
   }
 
-  // ── Reset ───────────────────────────────────────────────────────────────────
   const handleReset = () => {
     setStep('configure')
     setFile(null)
@@ -88,22 +99,44 @@ export default function App() {
   return (
     <Layout>
       {step === 'configure' && (
-        <div className="max-w-2xl mx-auto">
-          {/* Hero */}
-          <div className="text-center mb-10">
-            <h1 className="text-3xl font-bold text-zinc-100 mb-3">
-              Extract structured data from any document
+        <div key="configure" className="step-enter">
+          <section className="mb-14">
+            <h1 className="font-serif text-[2.5rem] leading-[1.1] tracking-tight text-[var(--color-ink-primary)] mb-5 max-w-[18ch]">
+              Self-correcting document extraction.
             </h1>
-            <p className="text-zinc-400">
-              Upload a PDF, CSV, or text file. DocForge uses a self-correcting LangGraph
-              agent to extract structured JSON matching your schema.
+            <p className="text-[1.0625rem] leading-relaxed text-[var(--color-ink-secondary)] max-w-[60ch]">
+              A LangGraph workflow that extracts structured JSON from PDFs, CSVs, and text —
+              and retries when the output doesn't match your schema.
             </p>
-          </div>
+          </section>
 
-          {/* Form card */}
+          <section className="mb-14" aria-label="How it works">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-5">
+              {HOW_IT_WORKS.map((s, i) => (
+                <div key={s.n} className="relative">
+                  {i > 0 && (
+                    <div
+                      aria-hidden="true"
+                      className="hidden sm:block absolute -left-3 top-2 bottom-2 w-px bg-[var(--color-hairline)]"
+                    />
+                  )}
+                  <div className="font-mono text-[11px] tracking-[0.14em] text-[var(--color-ember-500)] mb-2">
+                    {s.n}
+                  </div>
+                  <div className="font-serif text-[1.125rem] font-medium text-[var(--color-ink-primary)] mb-1.5">
+                    {s.label}
+                  </div>
+                  <p className="text-sm leading-relaxed text-[var(--color-ink-secondary)]">
+                    {s.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <form
             onSubmit={(e) => void handleSubmit(e)}
-            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-5"
+            className="card-panel p-7 space-y-7"
           >
             <SchemaSelector value={schema} onChange={setSchema} />
             <ModelSelector value={model} onChange={setModel} />
@@ -111,7 +144,7 @@ export default function App() {
             <DocumentUpload value={file} onChange={setFile} />
 
             {submitError && (
-              <div className="rounded-lg bg-red-950/50 border border-red-900 px-4 py-3 text-sm text-red-300">
+              <div className="rounded-md border border-[var(--color-rust-500)]/60 bg-[var(--color-rust-500)]/10 px-4 py-3 text-sm text-[var(--color-rust-400)]">
                 {submitError}
               </div>
             )}
@@ -119,54 +152,64 @@ export default function App() {
             <button
               type="submit"
               disabled={!schema || !file || submitting}
-              className="w-full py-3 px-6 rounded-xl bg-indigo-600 hover:bg-indigo-500
-                         text-white font-semibold text-sm transition-colors
+              className="group relative w-full py-3.5 px-6 rounded-lg
+                         bg-[var(--color-ember-500)] hover:bg-[var(--color-ember-400)]
+                         text-[var(--color-ember-ink)] font-medium text-[15px] tracking-tight
+                         transition-all duration-150
                          disabled:opacity-40 disabled:cursor-not-allowed
-                         focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
-                         focus:ring-offset-zinc-900"
+                         hover:enabled:glow-ember-soft active:enabled:scale-[0.99]
+                         focus:outline-none focus-visible:enabled:glow-ember"
             >
-              {submitting ? 'Uploading…' : 'Extract →'}
+              {/* Span isolates the pulse to the text — pulsing the button would dim its ember bg. */}
+              <span className={submitting ? 'text-pulse' : ''}>
+                {submitting ? 'Uploading…' : 'Extract →'}
+              </span>
             </button>
           </form>
+
+          <section className="mt-14 pt-6 border-t border-hairline">
+            <p className="text-sm leading-relaxed text-[var(--color-ink-tertiary)] max-w-[60ch]">
+              Without an API key, requests use a small allowlist of models and are rate-limited
+              to ~10 per hour. Pass your own OpenRouter key to bypass both.
+            </p>
+          </section>
         </div>
       )}
 
       {step === 'streaming' && (
-        <div className="max-w-2xl mx-auto">
-          <div className="flex items-center gap-3 mb-8">
+        <div key="streaming" className="step-enter">
+          <div className="flex items-center gap-4 mb-8">
             <button
               onClick={handleReset}
-              className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+              className="mono-cap text-[var(--color-ink-tertiary)] hover:text-[var(--color-ink-secondary)] transition-colors duration-150"
             >
-              ← Back
+              ← back
             </button>
-            <h2 className="text-xl font-semibold text-zinc-100">
-              Extracting from {file?.name}
+            <h2 className="font-serif text-[1.5rem] font-medium tracking-tight text-[var(--color-ink-primary)]">
+              Extracting <span className="font-mono text-[1rem] text-[var(--color-ink-secondary)]">{file?.name}</span>
             </h2>
           </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-            <ExtractionProgress events={events} status={sseStatus} error={sseError} />
-          </div>
+          <ExtractionProgress events={events} status={sseStatus} error={sseError} />
         </div>
       )}
 
       {step === 'done' && result && (
-        <div className="max-w-3xl mx-auto">
+        <div key="done" className="step-enter">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="text-xl font-semibold text-zinc-100">
-              Extraction Results
+            <h2 className="font-serif text-[1.5rem] font-medium tracking-tight text-[var(--color-ink-primary)]">
+              Extraction results
             </h2>
             <button
               onClick={handleReset}
-              className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700
-                         text-sm text-zinc-300 hover:text-zinc-100 transition-colors"
+              className="px-4 py-2 rounded-md border border-hairline-strong
+                         text-sm text-[var(--color-ink-secondary)]
+                         hover:text-[var(--color-ink-primary)] hover:border-[var(--color-ember-500)]/40
+                         transition-colors duration-150"
             >
               Extract another
             </button>
           </div>
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
-            <ResultsViewer result={result} />
-          </div>
+          <ResultsViewer result={result} />
         </div>
       )}
     </Layout>

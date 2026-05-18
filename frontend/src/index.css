@@ -1,10 +1,184 @@
 @import "tailwindcss";
 
+/* Weight-axis only (no italics) — drops bundled italic woff2 files. */
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/fraunces/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+@theme {
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-serif: "Fraunces Variable", "Fraunces", ui-serif, Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  /* Surfaces — warm off-black, layered */
+  --color-surface-0: #0b0b0c;
+  --color-surface-1: #111113;
+  --color-surface-2: #16161a;
+  --color-surface-3: #1d1d22;
+
+  /* Hairline borders */
+  --color-hairline: rgba(255, 255, 255, 0.06);
+  --color-hairline-strong: rgba(255, 255, 255, 0.1);
+
+  /* Text — warm-leaning */
+  --color-ink-primary: #ededec;
+  --color-ink-secondary: #a1a1a0;
+  --color-ink-tertiary: #6e6e6d;
+  --color-ink-quaternary: #4a4a49;
+
+  /* Ember — the single accent. Muted, editorial. */
+  --color-ember-50: #fdf3ea;
+  --color-ember-200: #f0c499;
+  --color-ember-400: #e9a06a;
+  --color-ember-500: #e4823b;
+  --color-ember-600: #c66a26;
+  --color-ember-700: #9d5320;
+  /* Near-black text used against ember backgrounds (CTA button). */
+  --color-ember-ink: #1a0e05;
+
+  /* Muted reds + amber for state */
+  --color-rust-400: #c8634f;
+  --color-rust-500: #a14b3f;
+  --color-amber-400: #d4a05a;
+
+  /* Motion */
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration-quick: 150ms;
+  --duration-step: 300ms;
+}
+
 @layer base {
   :root {
     color-scheme: dark;
   }
+
+  html,
   body {
-    @apply bg-zinc-950 text-zinc-100 antialiased;
+    background: var(--color-surface-0);
+    color: var(--color-ink-primary);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  .font-serif {
+    font-feature-settings: "ss01", "ss02";
+    font-optical-sizing: auto;
+  }
+
+  ::selection {
+    background: rgba(228, 130, 59, 0.25);
+    color: var(--color-ink-primary);
+  }
+}
+
+@layer utilities {
+  .border-hairline {
+    border-color: var(--color-hairline);
+  }
+  .border-hairline-strong {
+    border-color: var(--color-hairline-strong);
+  }
+
+  .surface-lit {
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  }
+
+  /* Editorial card surface — used for the form, result panels, modals. */
+  .card-panel {
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-hairline-strong);
+    border-radius: 0.75rem; /* matches rounded-xl */
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  }
+
+  /* Mono uppercase eyebrow / label. Color is set by the caller. */
+  .mono-cap {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+  }
+  .mono-cap-sm {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+  }
+
+  .glow-ember {
+    box-shadow: 0 0 0 1px rgba(228, 130, 59, 0.4), 0 0 24px rgba(228, 130, 59, 0.18);
+  }
+  .glow-ember-soft {
+    box-shadow: 0 0 0 1px rgba(228, 130, 59, 0.3), 0 0 16px rgba(228, 130, 59, 0.12);
+  }
+
+  .ember-pulse {
+    animation: ember-pulse 1.4s var(--ease-out-soft) infinite;
+  }
+
+  .ember-sweep {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(228, 130, 59, 0) 0%,
+      rgba(228, 130, 59, 0.7) 50%,
+      rgba(228, 130, 59, 0) 100%
+    );
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    animation: ember-sweep 1.8s linear infinite;
+  }
+
+  .step-enter {
+    animation: step-enter var(--duration-step) var(--ease-out-soft) both;
+  }
+
+  .row-enter {
+    animation: row-enter var(--duration-step) var(--ease-out-soft) both;
+  }
+
+  .text-pulse {
+    animation: text-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes ember-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@keyframes ember-sweep {
+  0% { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+
+@keyframes step-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes row-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes text-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
