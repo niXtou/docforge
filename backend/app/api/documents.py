@@ -39,7 +39,7 @@ async def upload_document(
     file: UploadFile = File(..., description="The document file to extract data from."),
     schema_id: int = Form(..., description="ID of the ExtractionSchema to use."),
     model: str = Form(
-        default="google/gemini-2.0-flash-001",
+        default="google/gemini-3.1-flash-lite",
         description="OpenRouter model string (e.g., 'openai/gpt-4o').",
     ),
     api_key: str | None = Form(
@@ -161,4 +161,5 @@ async def get_result(
         model_used=job.model_used,
         processing_time_ms=job.processing_time_ms or 0,
         chunks_processed=job.chunks_processed or 0,
+        error_message=job.error_message,
     )

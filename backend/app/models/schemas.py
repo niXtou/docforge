@@ -46,7 +46,7 @@ class ExtractionRequest(BaseModel):
 
     schema_id: int = Field(..., gt=0, description="ID of the extraction schema to use")
     model: str = Field(
-        default="google/gemini-2.0-flash-001",
+        default="google/gemini-3.1-flash-lite",
         min_length=1,
         description="OpenRouter model string",
     )
@@ -99,6 +99,7 @@ class ExtractionResult(BaseModel):
     model_used: str
     processing_time_ms: int
     chunks_processed: int
+    error_message: str | None = None  # populated when status == "failed"
 
     model_config = {"from_attributes": True}
 

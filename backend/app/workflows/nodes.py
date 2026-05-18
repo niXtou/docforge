@@ -120,7 +120,7 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
     chain = llm.with_structured_output(schema)
 
     results: list[dict[str, Any]] = []
-    for i, chunk in enumerate(state.chunks):
+    for chunk in state.chunks:
         base_prompt = (
             f"Extract data matching this schema: {json.dumps(state.schema_definition)}\n\n"
             f"Document content:\n{chunk}"
@@ -134,14 +134,13 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         else:
             prompt_str = base_prompt
 
-        try:
-            result = await chain.ainvoke(prompt_str)
-        except Exception as e:
-            # If one chunk fails, record an empty result and continue rather
-            # than aborting the whole job
-            logger.warning("LLM call failed for chunk %d: %s", i, e)
-            results.append({})
-            continue
+        # Let LLM exceptions propagate. The previous version swallowed them
+        # and returned ``{}``, which the validator mistook for "missing
+        # required fields" — turning auth or model errors into misleading
+        # validation failures. ``_run_extraction_task`` already catches the
+        # raised exception, marks the job as ``failed``, persists the error
+        # to ``error_message`` and emits an SSE ``error`` event.
+        result = await chain.ainvoke(prompt_str)
 
         # Normalise to plain dict regardless of what the LLM client returned
         if isinstance(result, dict):
