@@ -15,44 +15,51 @@ export function ApiKeyInput({ value, onChange }: Props) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex items-center gap-3">
         <button
           type="button"
           role="switch"
           aria-checked={enabled}
           onClick={() => handleToggle(!enabled)}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
-            ${enabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+          className={`relative inline-flex h-[18px] w-9 items-center rounded-full transition-colors duration-150
+            ${enabled ? 'bg-[var(--color-ember-500)]' : 'bg-[var(--color-surface-3)] border border-hairline-strong'}`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform
-              ${enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'}`}
+            className={`inline-block h-3 w-3 transform rounded-full bg-[var(--color-ink-primary)] transition-transform duration-150
+              ${enabled ? 'translate-x-[20px]' : 'translate-x-[3px]'}`}
           />
         </button>
-        <label className="text-sm font-medium text-zinc-300 cursor-pointer" onClick={() => handleToggle(!enabled)}>
+        <label
+          className="text-sm text-[var(--color-ink-secondary)] cursor-pointer leading-tight"
+          onClick={() => handleToggle(!enabled)}
+        >
           Use your own OpenRouter key{' '}
-          <span className="text-zinc-500 font-normal">(BYOK — bypasses rate limits)</span>
+          <span className="text-[var(--color-ink-tertiary)]">— bypasses rate limits</span>
         </label>
       </div>
 
       {enabled && (
-        <div className="relative">
+        <div className="relative row-enter">
           <input
             type={visible ? 'text' : 'password'}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="sk-or-..."
             autoComplete="off"
-            className="w-full rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100
-                       placeholder-zinc-600 px-3 py-2 pr-10 text-sm font-mono
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+            className="w-full rounded-md bg-[var(--color-surface-2)] border border-hairline-strong
+                       text-[var(--color-ink-primary)] placeholder-[var(--color-ink-quaternary)]
+                       px-3.5 py-2.5 pr-14 text-sm font-mono
+                       transition-shadow duration-150
+                       focus:outline-none focus:glow-ember-soft focus:border-transparent"
           />
           <button
             type="button"
             onClick={() => setVisible((v) => !v)}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500
-                       hover:text-zinc-300 transition-colors text-xs"
+            className="absolute right-3 top-1/2 -translate-y-1/2
+                       font-mono text-[11px] uppercase tracking-[0.12em]
+                       text-[var(--color-ink-tertiary)] hover:text-[var(--color-ember-400)]
+                       transition-colors duration-150"
             aria-label={visible ? 'Hide key' : 'Show key'}
           >
             {visible ? 'hide' : 'show'}

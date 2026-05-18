@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { FieldLabel } from './FieldLabel'
 
 const ACCEPTED = ['.pdf', '.txt', '.csv', '.md']
 const ACCEPTED_MIME = ['application/pdf', 'text/plain', 'text/csv', 'text/markdown']
@@ -50,26 +51,32 @@ export function DocumentUpload({ value, onChange, disabled = false }: Props) {
   )
 
   return (
-    <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-zinc-300">
-        Document
-      </label>
+    <div className="space-y-2">
+      <FieldLabel>Document</FieldLabel>
       <div
         role="button"
         tabIndex={disabled ? -1 : 0}
         aria-label="Upload document"
-        onDragOver={(e) => { e.preventDefault(); if (!disabled) setDragging(true) }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          if (!disabled) setDragging(true)
+        }}
         onDragLeave={() => setDragging(false)}
         onDrop={disabled ? undefined : onDrop}
         onClick={() => !disabled && inputRef.current?.click()}
         onKeyDown={(e) => e.key === 'Enter' && !disabled && inputRef.current?.click()}
         className={`
-          relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed
-          py-10 px-6 text-center cursor-pointer transition-all select-none
-          ${disabled ? 'opacity-50 cursor-not-allowed border-zinc-800' :
-            dragging ? 'border-indigo-500 bg-indigo-950/30' :
-            value ? 'border-zinc-600 bg-zinc-800/50' :
-            'border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800/30'}
+          relative flex flex-col items-center justify-center gap-2 rounded-lg
+          py-10 px-6 text-center cursor-pointer transition-all duration-150 select-none
+          ${
+            disabled
+              ? 'opacity-50 cursor-not-allowed border border-hairline border-dashed'
+              : dragging
+              ? 'border border-[var(--color-ember-500)]/70 bg-[var(--color-ember-500)]/[0.06] glow-ember-soft'
+              : value
+              ? 'border border-hairline-strong bg-[var(--color-surface-2)]'
+              : 'border border-hairline-strong border-dashed bg-[var(--color-surface-2)]/40 hover:bg-[var(--color-surface-2)] hover:border-[var(--color-ember-500)]/30'
+          }
         `}
       >
         <input
@@ -83,34 +90,40 @@ export function DocumentUpload({ value, onChange, disabled = false }: Props) {
         />
 
         {value ? (
-          <>
-            <div className="text-2xl">📄</div>
-            <p className="font-medium text-zinc-200 text-sm">{value.name}</p>
-            <p className="text-xs text-zinc-500">
-              {(value.size / 1024).toFixed(1)} KB · Click to change
+          <div className="row-enter">
+            <p className="font-serif text-[1.05rem] text-[var(--color-ink-primary)] mb-1">
+              {value.name}
+            </p>
+            <p className="mono-cap text-[var(--color-ink-tertiary)]">
+              {(value.size / 1024).toFixed(1)} kb · click to change
             </p>
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onChange(null) }}
-              className="mt-1 text-xs text-zinc-500 hover:text-red-400 transition-colors"
+              onClick={(e) => {
+                e.stopPropagation()
+                onChange(null)
+              }}
+              className="mt-3 mono-cap text-[var(--color-ink-tertiary)]
+                         hover:text-[var(--color-rust-400)] transition-colors duration-150"
             >
-              Remove
+              remove
             </button>
-          </>
+          </div>
         ) : (
           <>
-            <div className="text-3xl text-zinc-600">⬆</div>
-            <p className="text-sm text-zinc-400">
-              <span className="text-indigo-400 font-medium">Click to upload</span>
-              {' '}or drag and drop
+            <p className="text-sm text-[var(--color-ink-secondary)]">
+              <span className="text-[var(--color-ember-400)]">Click to upload</span>{' '}
+              <span className="text-[var(--color-ink-tertiary)]">or drag and drop</span>
             </p>
-            <p className="text-xs text-zinc-600">{ACCEPTED.join(', ')}</p>
+            <p className="mono-cap text-[var(--color-ink-quaternary)]">
+              {ACCEPTED.join(' · ')}
+            </p>
           </>
         )}
       </div>
 
       {formatError && (
-        <p className="text-xs text-red-400">{formatError}</p>
+        <p className="text-xs text-[var(--color-rust-400)]">{formatError}</p>
       )}
     </div>
   )
