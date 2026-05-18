@@ -52,6 +52,14 @@ export function ResultsViewer({ result }: Props) {
           : <span className="ml-2 text-amber-600">· validation issues</span>}
       </p>
 
+      {/* Failure banner — only when the job aborted before producing output */}
+      {result.status === 'failed' && result.error_message && (
+        <div className="rounded-lg bg-red-950/50 border border-red-900 px-4 py-3">
+          <p className="text-xs font-medium text-red-300 mb-1">Extraction failed</p>
+          <p className="text-sm font-mono text-red-200 break-words">{result.error_message}</p>
+        </div>
+      )}
+
       {/* View toggle + copy */}
       <div className="flex items-center justify-between">
         <div className="flex gap-1 p-1 rounded-lg bg-zinc-900 border border-zinc-800">

@@ -77,6 +77,35 @@ async def test_retry_loop_fires(tmp_path: Path, monkeypatch: MonkeyPatch) -> Non
     assert result["status"] == "completed"
 
 
+async def test_llm_error_propagates(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    """LLM errors must surface, not be swallowed into an empty result.
+
+    Regression test: a failing ``chain.ainvoke`` used to be caught inside
+    ``extract_structured`` and replaced with ``{}``, which downstream looked
+    like a successful-but-empty extraction. The retry loop then masked the
+    real error as a generic validation failure.
+    """
+    import pytest
+
+    doc = tmp_path / "invoice.txt"
+    doc.write_text("Invoice data")
+
+    mock_chain = MagicMock()
+    mock_chain.ainvoke = AsyncMock(side_effect=RuntimeError("upstream auth failed"))
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: mock_llm)
+
+    state = WorkflowState(
+        document_id="test-job-err",
+        file_path=str(doc),
+        schema_definition=INVOICE_SCHEMA,
+    )
+
+    with pytest.raises(RuntimeError, match="upstream auth failed"):
+        await compiled_graph.ainvoke(state)
+
+
 async def test_max_retries_graceful(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """Graph should complete with errors (not raise) when max retries are exhausted."""
     doc = tmp_path / "invoice.txt"

@@ -28,6 +28,8 @@ export interface ExtractionResult {
   model_used: string
   processing_time_ms: number
   chunks_processed: number
+  /** Human-readable failure reason; populated when status === 'failed' */
+  error_message: string | null
 }
 
 /** Payload for POST /api/schemas */
@@ -60,8 +62,7 @@ export interface ErrorResponse {
  * Must stay in sync with backend settings.demo_allowed_models.
  */
 export const DEMO_MODELS = [
-  { id: 'google/gemini-2.0-flash-001', label: 'Gemini 2.0 Flash' },
-  { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini' },
+  { id: 'google/gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
   { id: 'openai/gpt-5.4-nano', label: 'GPT-5.4 Nano' },
   { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
 ] as const
