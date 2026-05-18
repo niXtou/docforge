@@ -7,12 +7,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      // In dev, forward all /api/* requests to the FastAPI backend.
+      // In dev, forward backend routes to the FastAPI server.
       // In production, Nginx handles this routing.
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-      },
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      '/docs': { target: 'http://localhost:8000', changeOrigin: true },
+      '/redoc': { target: 'http://localhost:8000', changeOrigin: true },
+      '/openapi.json': { target: 'http://localhost:8000', changeOrigin: true },
     },
   },
   test: {
