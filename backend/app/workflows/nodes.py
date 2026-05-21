@@ -9,24 +9,34 @@ LangGraph merges the returned dict into the state automatically. Nodes should
 NOT mutate the state object directly — always return a new dict.
 
 NODE EXECUTION ORDER (see graph.py for the wiring):
-  parse_document → chunk_text → extract_structured → validate_extraction
-    ↑                                                        │
-    └────────────────────── (retry loop) ────────────────────┘
-                                                             ↓
-                                                    merge_extractions
+  parse_document → chunk_text → extract_structured → consolidate
+    ↑                                                     │
+    │                                                     ▼
+    │                                            verify_grounding
+    │                                                     │
+    └──────── (retry loop) ──── validate_extraction ◄─────┘
+                                       │
+                                       ▼
+                                   finalize
 """
 
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import pymupdf4llm
+from jsonschema import Draft202012Validator
 from langchain_community.document_loaders import CSVLoader, TextLoader
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.core.llm import get_llm
+from app.workflows.playbooks import build_system_prompt, strip_extension_keys
 from app.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
@@ -79,23 +89,30 @@ async def parse_document(state: WorkflowState) -> dict[str, Any]:
 async def chunk_text(state: WorkflowState) -> dict[str, Any]:
     """Split raw content into chunks suitable for LLM processing.
 
-    Documents under 4 000 characters are kept as a single chunk.
-    Larger documents are split with overlap to preserve context across
-    chunk boundaries.
+    Documents at or below ``settings.single_pass_char_limit`` are kept as a
+    single chunk and extracted in one LLM call — modern large-context models
+    handle this comfortably, and a single pass sidesteps the merge-reconciliation
+    errors that arise when the same field is extracted across several chunks.
+
+    Larger documents are split with overlap to preserve context across chunk
+    boundaries. Chunk 0 is the *primary* chunk: header/scalar fields (names,
+    titles, authors) live at the top of a document, so the consolidate step
+    sources scalars from it rather than letting a later chunk overwrite them.
     """
-    if len(state.raw_content) <= 4000:
-        # Short document — no need to split, send it all in one LLM call
-        return {"chunks": [state.raw_content]}
+    if len(state.raw_content) <= settings.single_pass_char_limit:
+        # Short document — send it all in one LLM call, no merge needed.
+        return {"chunks": [state.raw_content], "primary_chunk_index": 0}
 
     # RecursiveCharacterTextSplitter tries to split on paragraph breaks first,
     # then sentences, then words — preferring natural boundaries over hard cuts.
-    # chunk_overlap=400 means consecutive chunks share 400 chars of context so
-    # a field that spans a boundary isn't lost.
-    # TODO: make chunk_size and chunk_overlap configurable via settings
-    splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=400)
+    # chunk_overlap means consecutive chunks share context so a field that spans
+    # a boundary isn't lost.
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap
+    )
     chunks = splitter.split_text(state.raw_content)
     logger.info("Split document into %d chunks", len(chunks))
-    return {"chunks": chunks}
+    return {"chunks": chunks, "primary_chunk_index": 0}
 
 
 async def extract_structured(state: WorkflowState) -> dict[str, Any]:
@@ -113,26 +130,39 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
     handles the prompt engineering and response parsing for this automatically.
     """
     llm = get_llm(model=state.model, api_key=state.api_key)
-    # with_structured_output requires a top-level "title" to use as the function name
-    schema = state.schema_definition
+
+    # The schema's x-doc-type selects the disambiguation playbook (e.g. "authors
+    # are the byline, not the references"). The system prompt = universal
+    # anti-hallucination rules + that playbook. This is the knowledge that the
+    # UI's schema selection used to carry but never reached the model.
+    doc_type = state.schema_definition.get("x-doc-type")
+    system_prompt = build_system_prompt(doc_type)
+
+    # Strip x-* extension keys before structured output — they are our metadata,
+    # not valid input for the model API. Add a title for the function name.
+    schema = strip_extension_keys(state.schema_definition)
     if "title" not in schema:
         schema = {"title": "ExtractionResult", **schema}
     chain = llm.with_structured_output(schema)
 
     results: list[dict[str, Any]] = []
     for chunk in state.chunks:
-        base_prompt = (
-            f"Extract data matching this schema: {json.dumps(state.schema_definition)}\n\n"
-            f"Document content:\n{chunk}"
-        )
+        user_sections = [
+            "Extract data into this schema. Each field's 'description' is the "
+            f"authoritative instruction for what to extract:\n{json.dumps(schema)}",
+            f"Document content:\n{chunk}",
+        ]
         if state.retry_count > 0:
-            # On a retry, prepend the previous errors so the LLM can self-correct
-            error_prefix = (
-                "Previous validation errors:\n" + "\n".join(state.last_validation_errors) + "\n\n"
+            # On a retry, lead with the previous problems so the model self-corrects.
+            user_sections.insert(
+                0,
+                "Your previous attempt had these problems — fix them:\n"
+                + "\n".join(state.last_validation_errors),
             )
-            prompt_str = error_prefix + base_prompt
-        else:
-            prompt_str = base_prompt
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content="\n\n".join(user_sections)),
+        ]
 
         # Let LLM exceptions propagate. The previous version swallowed them
         # and returned ``{}``, which the validator mistook for "missing
@@ -140,7 +170,7 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         # validation failures. ``_run_extraction_task`` already catches the
         # raised exception, marks the job as ``failed``, persists the error
         # to ``error_message`` and emits an SSE ``error`` event.
-        result = await chain.ainvoke(prompt_str)
+        result = await chain.ainvoke(messages)
 
         # Normalise to plain dict regardless of what the LLM client returned
         if isinstance(result, dict):
@@ -158,78 +188,202 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
     return {"chunk_extractions": results}
 
 
+def _is_empty(value: Any) -> bool:
+    """True if a value should be treated as 'not extracted' (None / blank / [])."""
+    return value is None or value == "" or value == []
+
+
 def _merge_chunks(
     chunk_extractions: list[dict[str, Any]],
     properties: dict[str, Any],
+    primary_index: int = 0,
 ) -> dict[str, Any]:
     """Merge per-chunk extraction dicts respecting array vs scalar field types.
 
     Merge strategy:
       - Array fields  (schema type = "array"):  concatenate all chunk values
-      - Scalar fields (everything else):        last chunk's value wins
+        in chunk order (e.g. line items in an invoice, skills on a CV).
+      - Scalar fields (everything else):        take the PRIMARY chunk's value.
+        Header/scalar fields (name, title, author) live at the top of a
+        document, so the primary chunk (index 0) is authoritative. Only if the
+        primary chunk did not extract the field do we fall back to the first
+        other chunk that did. This replaces the old "last chunk wins", which
+        let a later chunk's guess overwrite a correct early value.
 
-    This is a pure helper — it has no side effects and is used by both
-    validate_extraction (to check completeness) and merge_extractions (final merge).
+    Pure helper, no side effects.
     """
     merged: dict[str, Any] = {}
-    for extraction in chunk_extractions:
+    # Order chunks so the primary chunk is considered first for scalar fallback.
+    ordered = list(chunk_extractions)
+    if 0 <= primary_index < len(ordered):
+        primary = ordered.pop(primary_index)
+        ordered.insert(0, primary)
+
+    for extraction in ordered:
         for field, value in extraction.items():
             if properties.get(field, {}).get("type") == "array":
-                # Accumulate list items across chunks (e.g. line items in an invoice)
                 existing = merged.get(field, [])
                 if isinstance(existing, list) and isinstance(value, list):
                     merged[field] = existing + value
                 else:
                     merged[field] = value
             else:
-                # Scalar: last chunk wins (later chunks have more complete context)
-                merged[field] = value
+                # Scalar: first non-empty value in primary-first order wins.
+                if _is_empty(merged.get(field)) and not _is_empty(value) or field not in merged:
+                    merged[field] = value
     return merged
 
 
-async def validate_extraction(state: WorkflowState) -> dict[str, Any]:
-    """Validate merged extractions against the schema's required fields.
+async def consolidate(state: WorkflowState) -> dict[str, Any]:
+    """Merge per-chunk extractions into one working dict (``consolidated``).
 
-    Merges all chunk extractions inline and checks that every field listed
-    in ``required`` is present and non-empty in the combined result.  Returns
-    updated retry state — callers should route back to extraction when errors
-    are present and retries remain.
-
-    NOTE: retry_count is incremented HERE (in validate), not in extract_structured.
-    This is intentional: the router reads retry_count immediately after validate
-    returns. If we incremented in extract, the counter would be wrong on the
-    first-attempt path (it would show 1 even though no retry happened).
+    Runs after extraction and before grounding/validation. Arrays accumulate
+    across chunks; scalars come from the primary chunk. For single-pass
+    documents (one chunk) this is a trivial pass-through.
     """
     properties: dict[str, Any] = state.schema_definition.get("properties", {})
-    merged = _merge_chunks(state.chunk_extractions, properties)
+    merged = _merge_chunks(state.chunk_extractions, properties, state.primary_chunk_index)
+    logger.info(
+        "Consolidated %d chunk(s) into %d field(s)", len(state.chunk_extractions), len(merged)
+    )
+    return {"consolidated": merged}
 
-    required_fields: list[str] = state.schema_definition.get("required", [])
-    errors: list[str] = []
-    for field in required_fields:
-        val = merged.get(field)
-        if val is None or val == "":
+
+class GroundingJudgment(BaseModel):
+    """Structured verdict from the LLM grounding judge for one value."""
+
+    supported: bool = Field(description="True if the value is supported by the document text")
+    evidence: str = Field(description="A short quote from the document that supports it, or empty")
+
+
+def _normalize(text: str) -> str:
+    """Lowercase and collapse all whitespace runs to single spaces for matching."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+async def _judge(llm_chain: Any, field: str, value: str, source: str) -> GroundingJudgment:
+    """Ask the LLM whether ``value`` for ``field`` is supported by ``source``."""
+    prompt = (
+        f"Document:\n{source}\n\n"
+        f"A system extracted the value below for the field '{field}'. Decide whether the "
+        f"document actually supports this exact value. Answer supported=false if it was "
+        f"inferred, guessed, or taken from an unrelated part of the document (e.g. a cited "
+        f"author rather than the document's own author).\n\n"
+        f"Value: {value}"
+    )
+    return await llm_chain.ainvoke(prompt)
+
+
+async def verify_grounding(state: WorkflowState) -> dict[str, Any]:
+    """Check that each extracted string value is actually supported by the source.
+
+    Two tiers, cheapest first:
+      1. Verbatim presence — if the normalized value appears in the normalized
+         source text, it is grounded for free (no LLM call).
+      2. LLM judge — values not found verbatim are sent to the model, which
+         decides whether the document supports them (catching, e.g., a cited
+         author mistaken for the byline). Rejected values are nulled out and an
+         issue is recorded.
+
+    Only string scalars and string array items are checked — numbers/dates are
+    frequently reformatted, so verbatim matching is unreliable for them and they
+    are left to schema validation instead. Grounding issues are written to
+    ``grounding_issues``; validate folds them into the retry feedback.
+    """
+    consolidated: dict[str, Any] = dict(state.consolidated or {})
+    source_norm = _normalize(state.raw_content)
+    issues: list[str] = []
+
+    # Collect string values that are NOT present verbatim — only these need a judge.
+    to_judge: list[tuple[str, str, int | None]] = []  # (field, value, list_index or None)
+    for field, value in consolidated.items():
+        if isinstance(value, str) and value.strip():
+            if _normalize(value) not in source_norm:
+                to_judge.append((field, value, None))
+        elif isinstance(value, list):
+            for idx, item in enumerate(value):
+                if isinstance(item, str) and item.strip() and _normalize(item) not in source_norm:
+                    to_judge.append((field, item, idx))
+
+    if not to_judge:
+        return {"consolidated": consolidated, "grounding_issues": []}
+
+    llm = get_llm(model=state.model, api_key=state.api_key)
+    judge_chain = llm.with_structured_output(GroundingJudgment)
+
+    # Track array items to drop after iterating (don't mutate lists mid-loop).
+    drop_items: dict[str, set[int]] = {}
+    for field, value, list_index in to_judge:
+        verdict = await _judge(judge_chain, field, value, state.raw_content)
+        if not getattr(verdict, "supported", False):
+            issues.append(f"Field '{field}': value '{value}' is not supported by the document")
+            if list_index is None:
+                consolidated[field] = None
+            else:
+                drop_items.setdefault(field, set()).add(list_index)
+
+    for field, indices in drop_items.items():
+        consolidated[field] = [
+            item for i, item in enumerate(consolidated[field]) if i not in indices
+        ]
+
+    if issues:
+        logger.warning("Grounding rejected %d value(s)", len(issues))
+    return {"consolidated": consolidated, "grounding_issues": issues}
+
+
+async def validate_extraction(state: WorkflowState) -> dict[str, Any]:
+    """Validate the consolidated result against the schema, three ways.
+
+    Operates on ``state.consolidated`` (produced by consolidate, refined by
+    verify_grounding) and accumulates three classes of error:
+      1. Grounding issues carried over from verify_grounding.
+      2. Required fields that are missing or empty.
+      3. JSON-Schema violations on the present values (wrong type, bad enum,
+         failed format) — caught via ``jsonschema``. This is what lets the
+         retry loop fix *wrong* values, not just *missing* ones.
+
+    Empty/None values are dropped before type-checking so a field that wasn't
+    extracted reads as "missing required" rather than a spurious type error.
+
+    NOTE: retry_count is incremented HERE (in validate), not in extract.
+    The router reads retry_count immediately after validate returns; bumping it
+    in extract would mis-count the first (non-retry) attempt.
+    """
+    consolidated: dict[str, Any] = state.consolidated or {}
+    schema = strip_extension_keys(state.schema_definition)
+    errors: list[str] = list(state.grounding_issues)
+
+    # 2. Required-present (treat None / "" / [] as missing).
+    for field in schema.get("required", []):
+        if _is_empty(consolidated.get(field)):
             errors.append(f"Required field '{field}' is missing or empty")
+
+    # 3. JSON-Schema type/enum/format checks on the values that ARE present.
+    #    'required' is handled above, so validate a copy without it to avoid
+    #    double-reporting missing fields.
+    type_schema = {k: v for k, v in schema.items() if k != "required"}
+    instance = {k: v for k, v in consolidated.items() if not _is_empty(v)}
+    for err in Draft202012Validator(type_schema).iter_errors(instance):
+        location = "/".join(str(p) for p in err.path) or "(root)"
+        errors.append(f"Field '{location}': {err.message}")
 
     if errors:
         logger.warning("Validation failed with %d error(s)", len(errors))
-        # Increment retry_count so the router knows another attempt has been used
         return {"last_validation_errors": errors, "retry_count": state.retry_count + 1}
 
     logger.info("Validation passed")
     return {"last_validation_errors": [], "retry_count": state.retry_count}
 
 
-async def merge_extractions(state: WorkflowState) -> dict[str, Any]:
-    """Merge per-chunk extractions into a single final result dict.
+async def finalize(state: WorkflowState) -> dict[str, Any]:
+    """Promote the consolidated+verified working result to the final output.
 
-    For array-typed schema fields, values from all chunks are concatenated.
-    For all other field types the last chunk's value takes precedence.
-    The final status reflects whether validation was clean.
+    The heavy lifting (merging, grounding, validation) already happened upstream;
+    this node just publishes ``consolidated`` as ``final_result`` and sets the
+    terminal status. ``completed_with_errors`` means we exhausted retries but
+    still produced a best-effort result.
     """
-    properties: dict[str, Any] = state.schema_definition.get("properties", {})
-    merged = _merge_chunks(state.chunk_extractions, properties)
-
-    # "completed_with_errors" means we hit max retries but still produced output
     status = "completed" if not state.last_validation_errors else "completed_with_errors"
-    logger.info("Merge complete — status: %s", status)
-    return {"final_result": merged, "status": status}
+    logger.info("Finalize complete — status: %s", status)
+    return {"final_result": state.consolidated or {}, "status": status}
