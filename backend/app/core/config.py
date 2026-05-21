@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # ── Redis ─────────────────────────────────────────────────────────────────
     redis_url: str = Field(default="redis://localhost:6379/0")  # used for job queuing
 
+    # ── Extraction chunking ─────────────────────────────────────────────────────
+    # Documents at or below this many characters are extracted in a single LLM
+    # call (no chunking, no merge). Modern large-context models handle this
+    # comfortably, and a single pass avoids the reconciliation errors that come
+    # from merging the same field extracted across overlapping chunks.
+    # Larger documents are split; see chunk_size / chunk_overlap.
+    single_pass_char_limit: int = Field(default=24000)
+    chunk_size: int = Field(default=8000)  # char size of each split chunk
+    chunk_overlap: int = Field(default=400)  # shared chars between consecutive chunks
+
     # ── LLM Providers ─────────────────────────────────────────────────────────
     # All LLM calls go through OpenRouter, which is a unified gateway for models
     # from Anthropic, OpenAI, Google, and others. One API key gives access to all

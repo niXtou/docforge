@@ -52,7 +52,9 @@ class WorkflowState(BaseModel):
 
     chunks: list[str] = []  # set by chunk_text; one entry per chunk
     current_chunk_index: int = 0  # reserved for future streaming progress
+    primary_chunk_index: int = 0  # chunk holding header/scalar fields (name, title, author)
     chunk_extractions: list[dict] = []  # type: ignore[type-arg]  # one dict per chunk, set by extract_structured
+    consolidated: dict | None = None  # type: ignore[type-arg]  # merged working result; set by consolidate, refined by verify_grounding
 
     # ── Retry tracking ────────────────────────────────────────────────────────
     # These two fields form the control signal for the retry loop.
@@ -62,6 +64,7 @@ class WorkflowState(BaseModel):
     max_retries: int = 3  # give up and proceed to merge after this many retries
     last_validation_errors: list[str] = []  # populated by validate_extraction on failure;
     # prepended to the LLM prompt on the next retry
+    grounding_issues: list[str] = []  # set by verify_grounding; folded into the retry feedback
 
     # ── Output ────────────────────────────────────────────────────────────────
     # Set by merge_extractions at the end of the graph run.

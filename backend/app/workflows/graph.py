@@ -45,32 +45,41 @@ from langgraph.graph import END, StateGraph
 
 from app.workflows.nodes import (
     chunk_text,
+    consolidate,
     extract_structured,
-    merge_extractions,
+    finalize,
     parse_document,
     validate_extraction,
+    verify_grounding,
 )
 from app.workflows.state import WorkflowState
 
 
 def route_after_validate(state: WorkflowState) -> str:
-    """Decide whether to retry extraction or proceed to merge.
+    """Decide whether to retry extraction or proceed to finalize.
 
     Returns the name of the next node to execute.
     LangGraph calls this function after every `validate` node execution.
     """
     if not state.last_validation_errors:
-        # All required fields present — we're done
-        return "merge"
+        # Clean result (schema-valid, grounded, required present) — we're done.
+        return "finalize"
     if state.retry_count <= state.max_retries:
-        # Still have retries left — go back to extract with error context
+        # Still have retries left — go back to extract with error context.
         return "extract"
-    # Exhausted retries — proceed to merge with whatever we have
-    return "merge"
+    # Exhausted retries — finalize with the best-effort result.
+    return "finalize"
 
 
 # ── Graph definition ──────────────────────────────────────────────────────────
 # Build the graph by registering nodes then connecting them with edges.
+#
+#   parse → chunk → extract → consolidate → verify_grounding → validate → route
+#     ↑                                                                     │
+#     └──────────────── retry (re-extract with feedback) ←─────────────────┤
+#                                                          finalize ←───────┘
+#                                                             ↓
+#                                                            END
 
 graph: StateGraph[WorkflowState] = StateGraph(WorkflowState)
 
@@ -78,8 +87,10 @@ graph: StateGraph[WorkflowState] = StateGraph(WorkflowState)
 graph.add_node("parse", parse_document)
 graph.add_node("chunk", chunk_text)
 graph.add_node("extract", extract_structured)
+graph.add_node("consolidate", consolidate)
+graph.add_node("verify_grounding", verify_grounding)
 graph.add_node("validate", validate_extraction)
-graph.add_node("merge", merge_extractions)
+graph.add_node("finalize", finalize)
 
 # Set the first node that runs when the graph is invoked
 graph.set_entry_point("parse")
@@ -87,18 +98,20 @@ graph.set_entry_point("parse")
 # Fixed edges: always go from A to B
 graph.add_edge("parse", "chunk")
 graph.add_edge("chunk", "extract")
-graph.add_edge("extract", "validate")
+graph.add_edge("extract", "consolidate")
+graph.add_edge("consolidate", "verify_grounding")
+graph.add_edge("verify_grounding", "validate")
 
 # Conditional edge: after "validate", call route_after_validate to choose next node.
 # The dict maps possible return values to node names.
 graph.add_conditional_edges(
     "validate",
     route_after_validate,
-    {"merge": "merge", "extract": "extract"},
+    {"finalize": "finalize", "extract": "extract"},
 )
 
-# merge is the last step before the graph terminates
-graph.add_edge("merge", END)
+# finalize is the last step before the graph terminates
+graph.add_edge("finalize", END)
 
 # ── Compile ───────────────────────────────────────────────────────────────────
 # Validate the graph and build the execution engine. Module-level singleton —

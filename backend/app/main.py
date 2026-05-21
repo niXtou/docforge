@@ -59,14 +59,33 @@ _BUILTIN_SCHEMAS = [
         "description": "Extract key fields from an invoice document.",
         "json_schema": {
             "type": "object",
+            "x-doc-type": "invoice",
             "properties": {
-                "invoice_number": {"type": "string"},
-                "total_amount": {"type": "number"},
+                "invoice_number": {
+                    "type": "string",
+                    "description": "The invoice's own identifier/number, often labelled "
+                    "'Invoice No.' or '#'. Not a PO number, account number, or date.",
+                },
+                "total_amount": {
+                    "type": "number",
+                    "description": "The final total amount due, as a number (no currency "
+                    "symbol). Use the grand total, not a subtotal or line-item price.",
+                },
                 "currency": {"type": "string", "description": "ISO 4217 currency code"},
-                "vendor_name": {"type": "string"},
+                "vendor_name": {
+                    "type": "string",
+                    "description": "The party who ISSUED the invoice (the seller/biller). "
+                    "NOT the customer or bill-to recipient.",
+                },
                 "tax_id": {"type": "string", "description": "VAT/GST or Tax ID of the vendor"},
-                "invoice_date": {"type": "string"},
-                "billing_address": {"type": "string"},
+                "invoice_date": {
+                    "type": "string",
+                    "description": "The date the invoice was issued.",
+                },
+                "billing_address": {
+                    "type": "string",
+                    "description": "The address the invoice is billed to.",
+                },
             },
             "required": ["invoice_number", "total_amount", "vendor_name"],
         },
@@ -76,14 +95,34 @@ _BUILTIN_SCHEMAS = [
         "description": "Extract key fields from a resume or CV.",
         "json_schema": {
             "type": "object",
+            "x-doc-type": "resume",
             "properties": {
-                "full_name": {"type": "string"},
-                "email": {"type": "string"},
-                "phone": {"type": "string"},
-                "linkedin_url": {"type": "string"},
-                "github_url": {"type": "string"},
-                "years_of_experience": {"type": "integer"},
-                "skills": {"type": "array", "items": {"type": "string"}},
+                "full_name": {
+                    "type": "string",
+                    "description": "The name of the person this resume belongs to — usually "
+                    "the most prominent text at the top. NOT a reference, previous employer, "
+                    "manager, or school name.",
+                },
+                "email": {"type": "string", "description": "The candidate's own email address."},
+                "phone": {"type": "string", "description": "The candidate's own phone number."},
+                "linkedin_url": {
+                    "type": "string",
+                    "description": "URL of the candidate's LinkedIn profile.",
+                },
+                "github_url": {
+                    "type": "string",
+                    "description": "URL of the candidate's GitHub profile.",
+                },
+                "years_of_experience": {
+                    "type": "integer",
+                    "description": "Total years of professional experience, as an integer, "
+                    "only if explicitly stated.",
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Technical/professional skills listed by the candidate.",
+                },
             },
             "required": ["full_name"],
         },
@@ -93,11 +132,30 @@ _BUILTIN_SCHEMAS = [
         "description": "Extract key fields from an academic research paper.",
         "json_schema": {
             "type": "object",
+            "x-doc-type": "research_paper",
             "properties": {
-                "title": {"type": "string"},
-                "authors": {"type": "array", "items": {"type": "string"}},
-                "abstract": {"type": "string"},
-                "keywords": {"type": "array", "items": {"type": "string"}},
+                "title": {
+                    "type": "string",
+                    "description": "The paper's own title at the top of the first page. "
+                    "Not a section heading or a cited work's title.",
+                },
+                "authors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The byline authors listed under the title on the first "
+                    "page. NEVER include names from the references, citations, bibliography, "
+                    "or acknowledgements — those are other people's work.",
+                },
+                "abstract": {
+                    "type": "string",
+                    "description": "The paper's abstract, usually a single paragraph near "
+                    "the top labelled 'Abstract'.",
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords/index terms the paper lists for itself.",
+                },
             },
             "required": ["title", "authors", "abstract"],
         },
