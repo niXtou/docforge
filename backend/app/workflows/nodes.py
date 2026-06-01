@@ -32,6 +32,7 @@ from jsonschema import Draft202012Validator
 from langchain_community.document_loaders import CSVLoader, TextLoader
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langgraph.config import get_stream_writer
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
@@ -40,6 +41,119 @@ from app.workflows.playbooks import build_system_prompt, strip_extension_keys
 from app.workflows.state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _progress_writer() -> Any:
+    """Return LangGraph's custom stream writer, or None outside a streaming run.
+
+    Nodes call the returned writer to push fine-grained progress (e.g. "chunk
+    3/7") onto the graph's "custom" stream channel. When a node is invoked
+    directly (e.g. in unit tests) there is no streaming context, so we fall back
+    to None and progress emission becomes a no-op.
+    """
+    try:
+        return get_stream_writer()
+    except RuntimeError:
+        return None
+
+
+def _emit(writer: Any, node: str, completed: int, total: int) -> None:
+    """Push a progress update onto the custom stream channel, if streaming."""
+    if writer is not None:
+        writer({"kind": "progress", "node": node, "completed": completed, "total": total})
+
+
+def _header_signature(line: str) -> str:
+    """Normalize a line for header/footer matching.
+
+    Lowercases, collapses whitespace, and replaces digit runs with '#' so that
+    per-page numbers like '2 of 11' and '3 of 11' share one signature.
+    """
+    return re.sub(r"\d+", "#", re.sub(r"\s+", " ", line)).strip().lower()
+
+
+def _strip_running_headers(pages: list[str]) -> str:
+    """Drop running headers/footers from multi-page PDF text.
+
+    Academic PDFs repeat a running header/footer on every page (e.g.
+    'HAYES ET AL.', the journal name, '2 of 11'). The parser keeps these in the
+    text, and downstream extraction mistakes them for content — a repeated
+    'SURNAME ET AL.' header gets pulled in as an author on every page. We treat
+    the top/bottom few lines that recur across many pages as boilerplate and
+    remove every line matching those signatures. Short documents (< 3 pages) are
+    returned unchanged.
+    """
+    if len(pages) < 3:
+        return "\n\n".join(pages)
+
+    # Only the first/last couple of non-empty lines of a page can be a header
+    # or footer. Count how many pages each such signature appears on.
+    edge_counts: dict[str, int] = {}
+    for page in pages:
+        lines = [ln.strip() for ln in page.splitlines() if ln.strip()]
+        for sig in {_header_signature(ln) for ln in lines[:2] + lines[-2:]}:
+            edge_counts[sig] = edge_counts.get(sig, 0) + 1
+
+    # Boilerplate = a short edge signature repeating on at least half the pages.
+    threshold = max(3, len(pages) // 2)
+    boilerplate = {sig for sig, n in edge_counts.items() if n >= threshold and 0 < len(sig) <= 80}
+    if not boilerplate:
+        return "\n\n".join(pages)
+
+    cleaned: list[str] = []
+    for page in pages:
+        kept = [ln for ln in page.splitlines() if _header_signature(ln.strip()) not in boilerplate]
+        cleaned.append("\n".join(kept))
+    logger.info("Stripped %d running header/footer pattern(s) from PDF", len(boilerplate))
+    return "\n\n".join(cleaned)
+
+
+def _dedupe_preserve_order(items: list[Any]) -> list[Any]:
+    """Drop duplicate array values while preserving first-seen order.
+
+    Strings compare case- and whitespace-insensitively (so 'HAYES ET AL.' and
+    'Hayes et al.' collapse to one), keeping the first spelling seen. Non-string
+    items (e.g. invoice line-item objects) compare by equality.
+    """
+    seen: list[Any] = []
+    out: list[Any] = []
+    for item in items:
+        key = re.sub(r"\s+", " ", item).strip().lower() if isinstance(item, str) else item
+        if key in seen:
+            continue
+        seen.append(key)
+        out.append(item)
+    return out
+
+
+# A bibliographic/citation name form: "Surname AB" — a single surname token
+# followed by 1–4 bare initials (e.g. "Hayes CA", "Najmi Z", "Thorpe RJ").
+_CITATION_NAME = re.compile(r"^([^\W\d_][\w'’.-]*)\s+(?:[A-Z]\.?){1,4}$")
+
+
+def _drop_citation_duplicates(items: list[Any]) -> list[Any]:
+    """Remove citation-form duplicates of names already listed in fuller form.
+
+    Research papers repeat their own authors in citation style ("Hayes CA") in
+    the references and the "How to cite this article" block. The model extracts
+    both forms; this drops the abbreviated one *only* when a fuller entry shares
+    its surname (so "Hayes CA" is removed because "Cellas A. Hayes" is present,
+    but a genuine standalone "Smith J" with no fuller match is kept). Non-string
+    items and unrelated arrays (keywords, line items) are unaffected.
+    """
+    surnames_in_full_form = {
+        item.strip().split()[-1].lower()
+        for item in items
+        if isinstance(item, str) and item.strip() and not _CITATION_NAME.match(item.strip())
+    }
+    out: list[Any] = []
+    for item in items:
+        if isinstance(item, str):
+            match = _CITATION_NAME.match(item.strip())
+            if match and match.group(1).lower() in surnames_in_full_form:
+                continue  # abbreviated citation form of an author already present
+        out.append(item)
+    return out
 
 
 async def parse_document(state: WorkflowState) -> dict[str, Any]:
@@ -52,16 +166,21 @@ async def parse_document(state: WorkflowState) -> dict[str, Any]:
 
     if ext == ".pdf":
         # pymupdf4llm produces clean markdown — preserves word order in styled fonts.
-        # Do NOT pass page_chunks=True; that changes the return type to list[dict].
+        # page_chunks=True returns one dict per page (keyed "text"), which lets us
+        # detect and strip running headers/footers before they pollute extraction.
         try:
-            text = await asyncio.to_thread(pymupdf4llm.to_markdown, state.file_path)
+            page_dicts: Any = await asyncio.to_thread(
+                pymupdf4llm.to_markdown, state.file_path, page_chunks=True
+            )
         except Exception as e:
             raise FileNotFoundError(f"Could not read file {state.file_path}: {e}") from e
-        logger.info("Parsed PDF document from %s", state.file_path)
+        pages = [str(p.get("text", "")) for p in page_dicts]
+        text = _strip_running_headers(pages)
+        logger.info("Parsed PDF document (%d page(s)) from %s", len(pages), state.file_path)
         return {
             "raw_content": text,
             "file_type": ext,
-            "messages": state.messages + ["Parsed PDF document"],
+            "messages": state.messages + [f"Parsed PDF document ({len(pages)} page(s))"],
         }
 
     if ext == ".csv":
@@ -145,8 +264,18 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         schema = {"title": "ExtractionResult", **schema}
     chain = llm.with_structured_output(schema)
 
-    results: list[dict[str, Any]] = []
-    for chunk in state.chunks:
+    # Extract every chunk concurrently (bounded) instead of one-at-a-time. A
+    # multi-chunk document used to make N sequential LLM calls with no feedback,
+    # which looked frozen and ran N× slower than necessary. asyncio.gather
+    # preserves input order, so chunk 0 stays the primary chunk for consolidate.
+    writer = _progress_writer()
+    total = len(state.chunks)
+    semaphore = asyncio.Semaphore(settings.extract_concurrency)
+    completed = 0
+    counter_lock = asyncio.Lock()
+
+    async def _extract_chunk(chunk: str) -> dict[str, Any]:
+        nonlocal completed
         user_sections = [
             "Extract data into this schema. Each field's 'description' is the "
             f"authoritative instruction for what to extract:\n{json.dumps(schema)}",
@@ -170,7 +299,8 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
         # validation failures. ``_run_extraction_task`` already catches the
         # raised exception, marks the job as ``failed``, persists the error
         # to ``error_message`` and emits an SSE ``error`` event.
-        result = await chain.ainvoke(messages)
+        async with semaphore:
+            result = await chain.ainvoke(messages)
 
         # Normalise to plain dict regardless of what the LLM client returned
         if isinstance(result, dict):
@@ -182,9 +312,13 @@ async def extract_structured(state: WorkflowState) -> dict[str, Any]:
             except AttributeError:
                 result_dict = dict(result)  # type: ignore[call-overload]
 
-        results.append(result_dict)
+        async with counter_lock:
+            completed += 1
+            _emit(writer, "extract", completed, total)
         logger.debug("Extracted chunk result: %s", list(result_dict.keys()))
+        return result_dict
 
+    results = list(await asyncio.gather(*(_extract_chunk(c) for c in state.chunks)))
     return {"chunk_extractions": results}
 
 
@@ -224,7 +358,10 @@ def _merge_chunks(
             if properties.get(field, {}).get("type") == "array":
                 existing = merged.get(field, [])
                 if isinstance(existing, list) and isinstance(value, list):
-                    merged[field] = existing + value
+                    # Concatenate across chunks, then drop duplicates: the same
+                    # value (e.g. a repeated header the model mistook for content)
+                    # is often emitted by several chunks.
+                    merged[field] = _dedupe_preserve_order(existing + value)
                 else:
                     merged[field] = value
             else:
@@ -243,6 +380,13 @@ async def consolidate(state: WorkflowState) -> dict[str, Any]:
     """
     properties: dict[str, Any] = state.schema_definition.get("properties", {})
     merged = _merge_chunks(state.chunk_extractions, properties, state.primary_chunk_index)
+
+    # Drop citation-form duplicates (e.g. "Hayes CA" when "Cellas A. Hayes" is
+    # already present) from array fields — papers self-cite their own authors.
+    for field, spec in properties.items():
+        if spec.get("type") == "array" and isinstance(merged.get(field), list):
+            merged[field] = _drop_citation_duplicates(merged[field])
+
     logger.info(
         "Consolidated %d chunk(s) into %d field(s)", len(state.chunk_extractions), len(merged)
     )
@@ -311,10 +455,28 @@ async def verify_grounding(state: WorkflowState) -> dict[str, Any]:
     llm = get_llm(model=state.model, api_key=state.api_key)
     judge_chain = llm.with_structured_output(GroundingJudgment)
 
+    # Judge all flagged values concurrently (bounded). Verdicts are applied
+    # afterwards in the original order so issue ordering stays deterministic.
+    writer = _progress_writer()
+    total = len(to_judge)
+    semaphore = asyncio.Semaphore(settings.extract_concurrency)
+    completed = 0
+    counter_lock = asyncio.Lock()
+
+    async def _judge_one(field: str, value: str) -> GroundingJudgment:
+        nonlocal completed
+        async with semaphore:
+            verdict = await _judge(judge_chain, field, value, state.raw_content)
+        async with counter_lock:
+            completed += 1
+            _emit(writer, "verify_grounding", completed, total)
+        return verdict
+
+    verdicts = await asyncio.gather(*(_judge_one(f, v) for f, v, _ in to_judge))
+
     # Track array items to drop after iterating (don't mutate lists mid-loop).
     drop_items: dict[str, set[int]] = {}
-    for field, value, list_index in to_judge:
-        verdict = await _judge(judge_chain, field, value, state.raw_content)
+    for (field, value, list_index), verdict in zip(to_judge, verdicts, strict=True):
         if not getattr(verdict, "supported", False):
             issues.append(f"Field '{field}': value '{value}' is not supported by the document")
             if list_index is None:

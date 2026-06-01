@@ -44,17 +44,17 @@ export interface SchemaCreate {
  * The `event` field matches the SSE `event:` line type.
  */
 export interface StreamEvent {
-  event: 'node_completed' | 'error' | 'done'
+  event: 'node_completed' | 'progress' | 'error' | 'done'
   node: string | null
   message: string
   timestamp: string
   data: Record<string, unknown> | null
 }
 
-/** Standard error body from the backend (403, 429 responses) */
+/** Standard error body from the backend (403, 413, 429 responses) */
 export interface ErrorResponse {
   detail: string
-  code: 'rate_limit_exceeded' | 'model_not_allowed' | null
+  code: 'rate_limit_exceeded' | 'model_not_allowed' | 'file_too_large' | null
 }
 
 /**

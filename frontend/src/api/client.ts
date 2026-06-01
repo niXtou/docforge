@@ -12,15 +12,54 @@ import type {
  */
 const BASE = import.meta.env.VITE_API_URL ?? ''
 
-/** Throw an error for non-2xx responses. Parses JSON error bodies when available. */
+/**
+ * Maximum upload size in megabytes. Mirrors the backend `max_upload_mb` setting
+ * (and sits below the Nginx `client_max_body_size`). Used both to pre-validate
+ * before uploading and to phrase the 413 message when a layer rejects the file.
+ */
+export const MAX_UPLOAD_MB = 10
+
+/**
+ * FastAPI's HTTPException nests structured details under `detail`, so the body
+ * is either `{ detail: "msg" }` or `{ detail: { detail: "msg", code } }`.
+ * This normalises both into a flat message + optional code.
+ */
+function readJsonError(body: ErrorResponse | { detail?: unknown }): { message: string; code?: string } {
+  const detail = (body as { detail?: unknown }).detail
+  if (detail && typeof detail === 'object') {
+    const inner = detail as ErrorResponse
+    return { message: inner.detail, code: inner.code ?? undefined }
+  }
+  if (typeof detail === 'string') {
+    return { message: detail, code: (body as ErrorResponse).code ?? undefined }
+  }
+  return { message: 'Request failed' }
+}
+
+/** Friendly fallback for non-JSON errors (e.g. an Nginx 413/502 HTML page). */
+function messageForStatus(status: number): string {
+  if (status === 413) {
+    return `File is too large. The maximum upload size is ${MAX_UPLOAD_MB} MB.`
+  }
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.'
+  if (status === 502 || status === 503 || status === 504) {
+    return 'The server is temporarily unavailable. Please try again shortly.'
+  }
+  return `Request failed (HTTP ${status}).`
+}
+
+/** Throw a descriptive error for non-2xx responses, JSON or not. */
 async function checkResponse(res: Response): Promise<void> {
   if (res.ok) return
   const contentType = res.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
-    const body = (await res.json()) as ErrorResponse
-    throw Object.assign(new Error(body.detail), { code: body.code })
+    const { message, code } = readJsonError((await res.json()) as ErrorResponse)
+    throw Object.assign(new Error(message || messageForStatus(res.status)), { code })
   }
-  throw new Error(`HTTP ${res.status}`)
+  // Non-JSON body (Nginx error page, gateway timeout, etc.) — map the status.
+  throw Object.assign(new Error(messageForStatus(res.status)), {
+    code: res.status === 413 ? 'file_too_large' : undefined,
+  })
 }
 
 export async function listSchemas(): Promise<Schema[]> {

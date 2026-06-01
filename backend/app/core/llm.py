@@ -46,6 +46,16 @@ def get_llm(
         model=model,
         api_key=effective_key,  # type: ignore[arg-type]
         temperature=temperature,
+        # Bound every call: a stalled OpenRouter response otherwise hangs the
+        # extraction forever. On timeout the client retries, then raises — which
+        # the extraction task turns into a failed job with a clear message.
+        #
+        # NOTE: ChatOpenRouter interprets its `timeout` field in MILLISECONDS
+        # (it is the alias for request_timeout), so we convert from the seconds
+        # we configure with. Passing seconds directly makes a 60 "second" timeout
+        # fire after 60 ms and read-times-out every real generation.
+        timeout=settings.llm_request_timeout * 1000,
+        max_retries=settings.llm_max_retries,
         # Attribution headers — OpenRouter uses these to identify the calling app.
         # They appear in your OpenRouter dashboard and help with rate limit attribution.
         app_url="https://docforge.nstoug.com",

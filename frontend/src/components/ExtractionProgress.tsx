@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { StreamEvent } from '../types'
 import type { SSEStatus } from '../hooks/useSSE'
 
+// Mirrors the real LangGraph pipeline in backend/app/workflows/graph.py.
 const NODES = [
-  { id: 'parse',    label: 'parse' },
-  { id: 'chunk',    label: 'chunk' },
-  { id: 'extract',  label: 'extract' },
-  { id: 'validate', label: 'validate' },
-  { id: 'merge',    label: 'merge' },
+  { id: 'parse',            label: 'parse' },
+  { id: 'chunk',            label: 'chunk' },
+  { id: 'extract',          label: 'extract' },
+  { id: 'consolidate',      label: 'consolidate' },
+  { id: 'verify_grounding', label: 'grounding' },
+  { id: 'validate',         label: 'validate' },
+  { id: 'finalize',         label: 'finalize' },
 ] as const
 
 type NodeId = (typeof NODES)[number]['id']
@@ -75,6 +78,12 @@ function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null
       ? NODES.find((n) => !completed.has(n.id))?.id ?? null
       : null
 
+  // Latest within-node progress (e.g. extract 3/7) for the active node, if any.
+  const activeProgress =
+    activeNode !== null
+      ? events.filter((e) => e.event === 'progress' && e.node === activeNode).at(-1) ?? null
+      : null
+
   const rows: LogRow[] = []
 
   nodeEvents.forEach((e, i) => {
@@ -97,7 +106,12 @@ function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null
       // every render via Date.now() and churn React reconciliation for no reason.
       offset: '         ',
       node: activeNode,
-      message: status === 'connecting' ? 'connecting…' : 'running…',
+      message:
+        status === 'connecting'
+          ? 'connecting…'
+          : activeProgress
+          ? `${activeProgress.data?.completed ?? '?'}/${activeProgress.data?.total ?? '?'}`
+          : 'running…',
       state: 'active',
     })
   }
