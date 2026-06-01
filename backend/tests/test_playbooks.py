@@ -18,6 +18,12 @@ def test_research_paper_playbook_disambiguates_authors() -> None:
     assert "reference" in prompt or "citation" in prompt
 
 
+def test_research_paper_playbook_includes_group_authors() -> None:
+    """Byline group / consortium authors (e.g. 'X Study Team') must be captured."""
+    prompt = build_system_prompt("research_paper").lower()
+    assert "group" in prompt or "consortium" in prompt
+
+
 def test_unknown_doc_type_falls_back_to_generic() -> None:
     """An unrecognised doc type must not raise — it falls back to generic."""
     prompt = build_system_prompt("totally_unknown_type")

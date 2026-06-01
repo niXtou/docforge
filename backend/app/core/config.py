@@ -53,6 +53,23 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=8000)  # char size of each split chunk
     chunk_overlap: int = Field(default=400)  # shared chars between consecutive chunks
 
+    # ── Uploads ─────────────────────────────────────────────────────────────────
+    # Maximum size of an uploaded document, in megabytes. Enforced in the upload
+    # handler with a descriptive 413 error. Keep this at or just below the
+    # frontend/gateway Nginx `client_max_body_size` so oversized files reach the
+    # app and get a human-readable message instead of a raw Nginx 413 page.
+    max_upload_mb: int = Field(default=10)
+
+    # ── LLM request behaviour ───────────────────────────────────────────────────
+    # Per-call timeout (seconds) for OpenRouter requests. Without this a stalled
+    # response hangs the whole extraction indefinitely; with it, the call aborts,
+    # retries, and ultimately fails the job with a clear message.
+    llm_request_timeout: int = Field(default=60)
+    llm_max_retries: int = Field(default=2)  # retries on timeout / transient errors
+    # Max chunk/grounding LLM calls run concurrently within a node. Higher = faster
+    # on large documents, but more simultaneous load on the provider's rate limit.
+    extract_concurrency: int = Field(default=5)
+
     # ── LLM Providers ─────────────────────────────────────────────────────────
     # All LLM calls go through OpenRouter, which is a unified gateway for models
     # from Anthropic, OpenAI, Google, and others. One API key gives access to all

@@ -1,8 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
+import { MAX_UPLOAD_MB } from '../api/client'
 import { FieldLabel } from './FieldLabel'
 
 const ACCEPTED = ['.pdf', '.txt', '.csv', '.md']
 const ACCEPTED_MIME = ['application/pdf', 'text/plain', 'text/csv', 'text/markdown']
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 interface Props {
   value: File | null
@@ -24,6 +26,13 @@ export function DocumentUpload({ value, onChange, disabled = false }: Props) {
     (file: File) => {
       if (!isAccepted(file)) {
         setFormatError(`Unsupported format. Accepted: ${ACCEPTED.join(', ')}`)
+        return
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        const sizeMb = file.size / (1024 * 1024)
+        setFormatError(
+          `File is too large (${sizeMb.toFixed(1)} MB). Maximum upload size is ${MAX_UPLOAD_MB} MB.`,
+        )
         return
       }
       setFormatError(null)

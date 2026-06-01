@@ -11,15 +11,36 @@ from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_db
+from app.core.config import settings
 from app.core.security import require_demo_access
 from app.models.db import ExtractionJob, ExtractionSchema
-from app.models.schemas import ExtractionJobResponse, ExtractionResult, StreamEvent
+from app.models.schemas import ErrorResponse, ExtractionJobResponse, ExtractionResult, StreamEvent
 from app.services.extraction import create_job, stream_extraction
 
 router = APIRouter()
 
 # Jobs that are already in a terminal state — no need to re-run the graph.
 _TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed"}
+
+
+def _file_too_large(size_bytes: int) -> HTTPException:
+    """Build a descriptive 413 for an oversized upload.
+
+    Nginx caps the body before it reaches us, but we enforce the limit in the
+    app too so API clients (and any layer that proxies past Nginx) get a clear,
+    machine-readable reason rather than a generic Nginx error page.
+    """
+    size_mb = size_bytes / (1024 * 1024)
+    return HTTPException(
+        status_code=413,
+        detail=ErrorResponse(
+            detail=(
+                f"File is too large ({size_mb:.1f} MB). "
+                f"The maximum upload size is {settings.max_upload_mb} MB."
+            ),
+            code="file_too_large",
+        ).model_dump(),
+    )
 
 
 @router.post(
@@ -53,15 +74,28 @@ async def upload_document(
 
     The actual extraction runs when the client connects to the SSE stream endpoint.
     """
+    # Reject oversized uploads up front with a descriptive error. Starlette
+    # populates UploadFile.size from the multipart part length, so we can fail
+    # fast before reading the whole file into memory.
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise _file_too_large(file.size)
+
     # Validate schema exists before writing anything to disk.
     schema = await db.get(ExtractionSchema, schema_id)
     if schema is None:
         raise HTTPException(status_code=404, detail="Schema not found")
 
-    # Write the uploaded file to a temp location the SSE handler can read later.
+    # Read the upload and re-check the actual byte count, in case the size
+    # header was absent or understated. Then persist to a temp file the SSE
+    # handler reads later.
+    content = await file.read()
+    if len(content) > max_bytes:
+        raise _file_too_large(len(content))
+
     suffix = Path(file.filename or "upload").suffix or ".bin"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(content)
         tmp_path = tmp.name
 
     job_id = str(uuid.uuid4())

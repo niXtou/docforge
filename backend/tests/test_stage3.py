@@ -117,6 +117,33 @@ async def test_upload_creates_pending_job(
     assert "job_id" in body
 
 
+async def test_upload_too_large_returns_descriptive_413(
+    client: AsyncClient, seeded_schema: ExtractionSchema
+) -> None:
+    """POST /api/extract returns a descriptive 413 when the file exceeds max_upload_mb."""
+    from app.core.config import settings
+    from app.core.security import require_demo_access
+    from app.main import app
+
+    async def _bypass() -> None:
+        return None
+
+    oversized = b"x" * (settings.max_upload_mb * 1024 * 1024 + 1)
+    app.dependency_overrides[require_demo_access] = _bypass
+    try:
+        response = await client.post(
+            "/api/extract",
+            data={"schema_id": str(seeded_schema.id), "model": "google/gemini-3.1-flash-lite"},
+            files={"file": ("big.txt", io.BytesIO(oversized), "text/plain")},
+        )
+    finally:
+        app.dependency_overrides.pop(require_demo_access, None)
+    assert response.status_code == 413
+    body = response.json()
+    assert body["detail"]["code"] == "file_too_large"
+    assert str(settings.max_upload_mb) in body["detail"]["detail"]
+
+
 async def test_upload_model_not_allowed(
     client: AsyncClient, seeded_schema: ExtractionSchema
 ) -> None:
@@ -206,11 +233,14 @@ async def test_stream_emits_node_events(
     db_session.add(job)
     await db_session.commit()
 
-    # Monkeypatch compiled_graph.astream to return one fake node update.
+    # Monkeypatch compiled_graph.astream. With stream_mode=["updates","custom"]
+    # each item is a (mode, payload) tuple: "custom" → fine-grained progress a
+    # node pushed, "updates" → a completed node's state delta.
     fake_node_output = {"parse": {"file_path": tmp_path, "chunks": ["chunk1"]}}
 
     async def _fake_astream(*args: object, **kwargs: object):  # type: ignore[override]
-        yield fake_node_output
+        yield ("custom", {"kind": "progress", "node": "extract", "completed": 1, "total": 1})
+        yield ("updates", fake_node_output)
 
     with patch("app.services.extraction.compiled_graph") as mock_graph:
         mock_graph.astream = _fake_astream
@@ -221,6 +251,7 @@ async def test_stream_emits_node_events(
 
     assert response.status_code == 200
     body = response.text
+    assert "progress" in body  # fine-grained within-node progress event
     assert "node_completed" in body
     assert "done" in body
 

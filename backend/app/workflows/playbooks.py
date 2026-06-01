@@ -46,6 +46,9 @@ PLAYBOOKS: dict[str, str] = {
         "- 'authors' are the byline listed directly under the title on the first "
         "page. NEVER include names that appear in the references, citations, "
         "bibliography, or acknowledgements — those are other people's work.\n"
+        "- Include group / consortium authors that appear in the byline (e.g. "
+        "'The X Study Team', 'the Y Group', or a collaboration name), not just "
+        "individual people — they are listed as authors too.\n"
         "- 'title' is the paper's own title at the top, not a cited work's title "
         "or a section heading.\n"
     ),

@@ -45,6 +45,15 @@ export function useSSE(url: string | null): UseSSEResult {
       statusRef.current = 'streaming'
     })
 
+    // Fine-grained within-node progress (e.g. "extract: 3/7"). Kept in the same
+    // events array; ExtractionProgress surfaces the latest one on the active row.
+    es.addEventListener('progress', (e: MessageEvent) => {
+      const event = JSON.parse(e.data as string) as StreamEvent
+      setEvents((prev) => [...prev, event])
+      setStatus('streaming')
+      statusRef.current = 'streaming'
+    })
+
     es.addEventListener('done', (e: MessageEvent) => {
       const event = JSON.parse(e.data as string) as StreamEvent
       setEvents((prev) => [...prev, event])

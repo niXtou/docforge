@@ -1,11 +1,18 @@
 """Unit tests for individual workflow nodes (chunk, consolidate, verify, validate)."""
 
+# These tests deliberately exercise module-private helpers directly.
+# pyright: reportPrivateUsage=false
+
 from unittest.mock import AsyncMock, MagicMock
 
 from pytest import MonkeyPatch
 
 from app.core.config import settings
 from app.workflows.nodes import (
+    _dedupe_preserve_order,
+    _drop_citation_duplicates,
+    _merge_chunks,
+    _strip_running_headers,
     chunk_text,
     consolidate,
     extract_structured,
@@ -208,3 +215,125 @@ async def test_extract_injects_playbook_and_strips_extension_keys(
     prompt_text = str(captured["messages"]).lower()
     assert "author" in prompt_text
     assert "reference" in prompt_text or "citation" in prompt_text
+
+
+def test_strip_running_headers_removes_repeated_header() -> None:
+    """A running header recurring across pages is removed; real content stays."""
+    pages = [
+        "Plasma p-tau217 and cognitive impairment\nCellas A. Hayes, Zara Najmi",
+        "2 of 11\nHAYES ET AL.\nIntroduction text on page two.",
+        "3 of 11\nHAYES ET AL.\nMethods text on page three.",
+        "4 of 11\nHAYES ET AL.\nResults text on page four.",
+    ]
+    cleaned = _strip_running_headers(pages)
+    assert "HAYES ET AL." not in cleaned  # running header stripped
+    assert "of 11" not in cleaned  # page-number footer stripped (digit-normalized)
+    assert "Cellas A. Hayes" in cleaned  # real byline author preserved
+    assert "Methods text on page three." in cleaned  # body content preserved
+
+
+def test_strip_running_headers_noop_for_short_docs() -> None:
+    """Documents under 3 pages are returned unchanged (no false positives)."""
+    pages = ["Page one body.", "Page two body."]
+    assert _strip_running_headers(pages) == "Page one body.\n\nPage two body."
+
+
+def test_merge_chunks_dedupes_array_values() -> None:
+    """Array fields concatenated across chunks drop duplicates, keep order/case."""
+    properties = {"authors": {"type": "array", "items": {"type": "string"}}}
+    chunk_extractions = [
+        {"authors": ["Cellas A. Hayes", "Zara Najmi"]},
+        {"authors": ["HAYES ET AL."]},
+        {"authors": ["Hayes et al.", "Zara Najmi"]},  # dup of header + dup author
+    ]
+    merged = _merge_chunks(chunk_extractions, properties)
+    assert merged["authors"] == ["Cellas A. Hayes", "Zara Najmi", "HAYES ET AL."]
+
+
+def test_dedupe_preserve_order_handles_non_strings() -> None:
+    """Dedupe works on dict items (e.g. invoice line items) via equality."""
+    items = [{"sku": "A"}, {"sku": "B"}, {"sku": "A"}]
+    assert _dedupe_preserve_order(items) == [{"sku": "A"}, {"sku": "B"}]
+
+
+def test_drop_citation_duplicate_authors() -> None:
+    """Citation-form authors are dropped when the fuller byline name is present.
+
+    Uses the exact list produced for the Hayes p-tau217 paper, where the self-
+    citation and references re-listed every author as 'Surname Initials'.
+    """
+    authors = [
+        "Cellas A. Hayes",
+        "Zara Najmi",
+        "Joey Annette Contreras",
+        "Anhiti Dharmapuri",
+        "Charisse N. Winston",
+        "The Health and Aging Brain Study (HABS-HD) Study Team",
+        "Hayes CA",
+        "Najmi Z",
+        "Contreras JA",
+        "Dharmapuri A",
+        "Winston C",
+    ]
+    assert _drop_citation_duplicates(authors) == [
+        "Cellas A. Hayes",
+        "Zara Najmi",
+        "Joey Annette Contreras",
+        "Anhiti Dharmapuri",
+        "Charisse N. Winston",
+        "The Health and Aging Brain Study (HABS-HD) Study Team",
+    ]
+
+
+def test_drop_citation_duplicates_keeps_standalone_citation_names() -> None:
+    """A citation-form name with no fuller match is kept (could be the only form)."""
+    # No "… Smith" fuller entry exists, so "Smith J" must survive.
+    assert _drop_citation_duplicates(["Smith J", "Jane Doe"]) == ["Smith J", "Jane Doe"]
+    # Keywords / skills shaped like 'Word XY' aren't dropped without a surname match.
+    assert _drop_citation_duplicates(["React JS", "plasma biomarkers"]) == [
+        "React JS",
+        "plasma biomarkers",
+    ]
+
+
+async def test_extract_runs_chunks_concurrently_preserving_order(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Chunks are extracted concurrently but results stay in input order.
+
+    Order matters: consolidate sources scalar fields from the primary chunk
+    (index 0), so a reordered result list would corrupt the merge.
+    """
+    import asyncio
+
+    started: list[int] = []
+
+    async def fake_ainvoke(messages: object) -> dict[str, object]:
+        # Decode the chunk index embedded in the prompt, then make earlier chunks
+        # finish LAST — if extraction were sequential or order-naive, results
+        # would come back reversed.
+        idx = int(str(messages).split("CHUNK#")[1].split("#")[0])
+        started.append(idx)
+        await asyncio.sleep(0.02 * (5 - idx))  # chunk 0 sleeps longest
+        return {"invoice_number": f"INV-{idx}"}
+
+    chain = MagicMock()
+    chain.ainvoke = fake_ainvoke
+    llm = MagicMock()
+    llm.with_structured_output.return_value = chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
+    monkeypatch.setattr(settings, "extract_concurrency", 5)
+
+    chunks = [f"CHUNK#{i}# body" for i in range(5)]
+    state = _state(schema_definition=NUMERIC_SCHEMA, chunks=chunks)
+    result = await extract_structured(state)
+
+    # All five ran, and despite reversed completion the output keeps input order.
+    assert sorted(started) == [0, 1, 2, 3, 4]
+    assert [e["invoice_number"] for e in result["chunk_extractions"]] == [
+        "INV-0",
+        "INV-1",
+        "INV-2",
+        "INV-3",
+        "INV-4",
+    ]

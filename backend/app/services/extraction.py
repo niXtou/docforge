@@ -46,6 +46,7 @@ import time
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,11 +108,31 @@ async def _run_extraction_task(
 
     async with AsyncSessionLocal() as task_db:
         try:
-            async for update in compiled_graph.astream(
+            # "updates" → one item per node completion; "custom" → fine-grained
+            # progress a node pushed via get_stream_writer() (e.g. "chunk 3/7").
+            # With a list of modes, astream yields (mode, payload) tuples.
+            async for item in compiled_graph.astream(
                 state.model_dump(),  # type: ignore[arg-type]
-                stream_mode="updates",
+                stream_mode=["updates", "custom"],
             ):
-                for node_name, node_output in update.items():
+                # With a list of stream modes, each item is a (mode, payload) tuple.
+                mode, payload = cast("tuple[str, Any]", item)
+                if mode == "custom":
+                    node = str(payload.get("node", ""))
+                    done = payload.get("completed")
+                    total = payload.get("total")
+                    await queue.put(
+                        StreamEvent(
+                            event="progress",
+                            node=node,
+                            message=f"{node}: {done}/{total}",
+                            timestamp=datetime.now(tz=UTC),
+                            data=payload,
+                        )
+                    )
+                    continue
+
+                for node_name, node_output in payload.items():
                     final_state.update(node_output)  # type: ignore[arg-type]
                     logger.debug("%s Node '%s' completed", prefix, node_name)
                     await queue.put(
