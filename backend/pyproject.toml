@@ -11,24 +11,24 @@ dependencies = [
     # Data
     "sqlalchemy[asyncio]>=2.0.51",
     "asyncpg>=0.29.0",
-    "alembic>=1.18.5",
+    "alembic>=1.19.0",
     "redis>=8.1.0",
     # AI / LLM
     "langgraph>=1.2.10",
     "langchain>=1.3.14",
-    "langchain-anthropic>=1.5.3",
+    "langchain-anthropic>=1.5.4",
     "langchain-google-genai>=4.3.2",
     "langchain-community>=0.4.2",
     "langchain-text-splitters>=1.1.2",
     # Validation & Config
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.14.2",
+    "pydantic-settings>=2.15.0",
     # Document Processing
-    "pymupdf4llm>=1.28.0",
+    "pymupdf4llm>=1.28.2",
     "python-docx>=1.0.0",
     # Utilities
     "httpx>=0.27.0",
-    "sse-starlette>=3.4.6",
+    "sse-starlette>=3.4.8",
     "langchain-openrouter>=0.2.7",
     "jsonschema>=4.26.0",
 ]
