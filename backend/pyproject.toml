@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.52.3",
     "python-multipart>=0.0.32",
     # Data
-    "sqlalchemy[asyncio]>=2.0.51",
+    "sqlalchemy[asyncio]>=2.0.52",
     "asyncpg>=0.29.0",
     "alembic>=1.19.1",
     "redis>=8.1.0",
