@@ -18,6 +18,31 @@ export interface ExtractionJobResponse {
   created_at: string
 }
 
+/** One row of GET /api/extract — a listing, never the extracted data itself */
+export interface ExtractionJobSummary {
+  job_id: string
+  status: string
+  schema_name: string
+  original_filename: string
+  model_used: string
+  created_at: string
+  completed_at: string | null
+  processing_time_ms: number | null
+  retries_used: number
+  /** null until the workflow has run */
+  validation_passed: boolean | null
+}
+
+/** Where an extracted value was verified against the document */
+export interface FieldEvidence {
+  /** Snippet of the document the value was verified against; empty when unverified */
+  quote: string
+  /** verbatim = found in the text; judge = LLM judge; unverified = not checkable */
+  method: 'verbatim' | 'judge' | 'unverified'
+  /** false only for values the judge rejected (nulled / dropped from data) */
+  supported: boolean
+}
+
 export interface ExtractionResult {
   job_id: string
   status: 'completed' | 'completed_with_errors' | 'failed'
@@ -30,6 +55,14 @@ export interface ExtractionResult {
   chunks_processed: number
   /** Human-readable failure reason; populated when status === 'failed' */
   error_message: string | null
+  /** Errors from the final validation pass; empty when validation passed */
+  validation_errors: string[]
+  /**
+   * Per-field provenance keyed by field name, or "field[i]" for array items
+   * (i = position in data). Judge-rejected array items sit under
+   * "field[dropped:<original i>]".
+   */
+  evidence: Record<string, FieldEvidence>
 }
 
 /** Payload for POST /api/schemas */
@@ -42,9 +75,15 @@ export interface SchemaCreate {
 /**
  * SSE event emitted by GET /api/extract/{job_id}/stream.
  * The `event` field matches the SSE `event:` line type.
+ *
+ * `data` per event:
+ *   node_completed — keys_updated, plus chunk/extract: chunks; verify_grounding:
+ *                    issues, evidence_count; validate: errors, attempt
+ *   retry          — attempt, errors (validation failed; extraction re-runs)
+ *   progress       — node, completed, total
  */
 export interface StreamEvent {
-  event: 'node_completed' | 'progress' | 'error' | 'done'
+  event: 'node_completed' | 'progress' | 'retry' | 'error' | 'done'
   node: string | null
   message: string
   timestamp: string

@@ -54,6 +54,15 @@ export function useSSE(url: string | null): UseSSEResult {
       statusRef.current = 'streaming'
     })
 
+    // Validation failed and the graph is looping back to extract. The run is
+    // still in progress — just on its next attempt — so status stays streaming.
+    es.addEventListener('retry', (e: MessageEvent) => {
+      const event = JSON.parse(e.data as string) as StreamEvent
+      setEvents((prev) => [...prev, event])
+      setStatus('streaming')
+      statusRef.current = 'streaming'
+    })
+
     es.addEventListener('done', (e: MessageEvent) => {
       const event = JSON.parse(e.data as string) as StreamEvent
       setEvents((prev) => [...prev, event])

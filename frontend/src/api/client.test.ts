@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getResult, listSchemas, streamUrl, uploadDocument } from './client'
-import type { ExtractionResult, Schema } from '../types'
+import { createSchema, getResult, listJobs, listSchemas, streamUrl, uploadDocument } from './client'
+import type { ExtractionJobSummary, ExtractionResult, Schema } from '../types'
 
 // Helper to mock a JSON response
 function mockFetch(body: unknown, status = 200): void {
@@ -80,10 +80,54 @@ describe('getResult', () => {
       processing_time_ms: 1200,
       chunks_processed: 1,
       error_message: null,
+      validation_errors: [],
+      evidence: { invoice_number: { quote: 'Invoice INV-001', method: 'verbatim', supported: true } },
     }
     mockFetch(result)
     expect(await getResult('abc')).toEqual(result)
     expect(fetch).toHaveBeenCalledWith('/api/extract/abc/result')
+  })
+})
+
+describe('listJobs', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('fetches recent jobs with the limit', async () => {
+    const jobs: ExtractionJobSummary[] = [
+      {
+        job_id: 'abc',
+        status: 'completed',
+        schema_name: 'Invoice',
+        original_filename: 'a.pdf',
+        model_used: 'google/gemini-3.1-flash-lite',
+        created_at: '2026-01-01T00:00:00',
+        completed_at: '2026-01-01T00:00:05',
+        processing_time_ms: 5000,
+        retries_used: 0,
+        validation_passed: true,
+      },
+    ]
+    mockFetch(jobs)
+    expect(await listJobs(5)).toEqual(jobs)
+    expect(fetch).toHaveBeenCalledWith('/api/extract?limit=5')
+  })
+})
+
+describe('createSchema', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('flattens a 422 validation error list into one message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: [{ loc: ['body', 'json_schema'], msg: "Value error, json_schema must have type 'object'" }],
+        }),
+        { status: 422, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    await expect(
+      createSchema({ name: 'x', description: '', json_schema: { type: 'array' } }),
+    ).rejects.toThrow("json_schema must have type 'object'")
   })
 })
 

@@ -8,7 +8,13 @@ import { ApiKeyInput } from './components/ApiKeyInput'
 import { DocumentUpload } from './components/DocumentUpload'
 import { ExtractionProgress } from './components/ExtractionProgress'
 import { ResultsViewer } from './components/ResultsViewer'
-import { DEMO_MODELS, type Schema, type ExtractionResult } from './types'
+import { RecentJobs } from './components/RecentJobs'
+import {
+  DEMO_MODELS,
+  type Schema,
+  type ExtractionJobSummary,
+  type ExtractionResult,
+} from './types'
 
 type Step = 'configure' | 'streaming' | 'done'
 
@@ -40,6 +46,9 @@ export default function App() {
   const [sseUrl, setSseUrl] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [result, setResult] = useState<ExtractionResult | null>(null)
+  // Name shown in the streaming/done headings. Separate from `file` so a job
+  // reopened from history (no File object) still has a name to show.
+  const [resultFilename, setResultFilename] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -76,6 +85,7 @@ export default function App() {
         apiKey: apiKey || null,
       })
       setJobId(job.job_id)
+      setResultFilename(file.name)
       setSseUrl(streamUrl(job.job_id))
       setStep('streaming')
     } catch (err) {
@@ -85,10 +95,25 @@ export default function App() {
     }
   }
 
+  const handleOpenJob = (job: ExtractionJobSummary) => {
+    setSubmitError(null)
+    getResult(job.job_id)
+      .then((r) => {
+        setResult(r)
+        setResultFilename(job.original_filename)
+        setJobId(job.job_id)
+        setStep('done')
+      })
+      .catch((e: unknown) => {
+        setSubmitError((e as Error).message)
+      })
+  }
+
   const handleReset = () => {
     setStep('configure')
     setFile(null)
     setResult(null)
+    setResultFilename(null)
     setSseUrl(null)
     setJobId(null)
     setSubmitError(null)
@@ -167,6 +192,8 @@ export default function App() {
             </button>
           </form>
 
+          <RecentJobs onOpen={handleOpenJob} />
+
           <section className="mt-14 pt-6 border-t border-hairline">
             <p className="text-sm leading-relaxed text-[var(--color-ink-tertiary)] max-w-[60ch]">
               Without an API key, requests use a small allowlist of models and are rate-limited
@@ -186,7 +213,7 @@ export default function App() {
               ← back
             </button>
             <h2 className="font-serif text-[1.5rem] font-medium tracking-tight text-[var(--color-ink-primary)]">
-              Extracting <span className="font-mono text-[1rem] text-[var(--color-ink-secondary)]">{file?.name}</span>
+              Extracting <span className="font-mono text-[1rem] text-[var(--color-ink-secondary)]">{resultFilename}</span>
             </h2>
           </div>
           <ExtractionProgress events={events} status={sseStatus} error={sseError} />
@@ -196,8 +223,16 @@ export default function App() {
       {step === 'done' && result && (
         <div key="done" className="step-enter">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="font-serif text-[1.5rem] font-medium tracking-tight text-[var(--color-ink-primary)]">
+            <h2 className="font-serif text-[1.5rem] font-medium tracking-tight text-[var(--color-ink-primary)] min-w-0">
               Extraction results
+              {resultFilename && (
+                <>
+                  {' '}
+                  <span className="font-mono text-[1rem] text-[var(--color-ink-secondary)] break-all">
+                    {resultFilename}
+                  </span>
+                </>
+              )}
             </h2>
             <button
               onClick={handleReset}

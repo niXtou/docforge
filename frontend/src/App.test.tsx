@@ -3,7 +3,12 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import * as client from './api/client'
-import type { Schema, ExtractionJobResponse, ExtractionResult } from './types'
+import type {
+  Schema,
+  ExtractionJobResponse,
+  ExtractionJobSummary,
+  ExtractionResult,
+} from './types'
 
 // Minimal mock schemas
 const mockSchemas: Schema[] = [
@@ -27,10 +32,43 @@ const mockResult: ExtractionResult = {
   processing_time_ms: 800,
   chunks_processed: 1,
   error_message: null,
+  validation_errors: [],
+  evidence: {
+    invoice_number: { quote: 'Invoice INV-001 dated', method: 'verbatim', supported: true },
+    total_amount: { quote: '', method: 'unverified', supported: true },
+  },
 }
+
+const mockJobs: ExtractionJobSummary[] = [
+  {
+    job_id: 'test-job-123',
+    status: 'completed',
+    schema_name: 'Invoice',
+    original_filename: 'old-invoice.pdf',
+    model_used: 'google/gemini-3.1-flash-lite',
+    created_at: '2026-01-01T00:00:00',
+    completed_at: '2026-01-01T00:00:01',
+    processing_time_ms: 800,
+    retries_used: 1,
+    validation_passed: true,
+  },
+  {
+    job_id: 'test-job-456',
+    status: 'processing',
+    schema_name: 'Invoice',
+    original_filename: 'in-flight.pdf',
+    model_used: 'google/gemini-3.1-flash-lite',
+    created_at: '2026-01-01T00:00:00',
+    completed_at: null,
+    processing_time_ms: null,
+    retries_used: 0,
+    validation_passed: null,
+  },
+]
 
 beforeEach(() => {
   vi.spyOn(client, 'listSchemas').mockResolvedValue(mockSchemas)
+  vi.spyOn(client, 'listJobs').mockResolvedValue([])
   vi.spyOn(client, 'uploadDocument').mockResolvedValue(mockJobResponse)
   vi.spyOn(client, 'getResult').mockResolvedValue(mockResult)
   vi.spyOn(client, 'streamUrl').mockReturnValue('/api/extract/test-job-123/stream')
@@ -73,5 +111,25 @@ describe('App wizard flow', () => {
     await waitFor(() => {
       expect(client.uploadDocument).toHaveBeenCalledOnce()
     })
+  })
+
+  it('reopens a finished job from recent jobs', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(client, 'listJobs').mockResolvedValue(mockJobs)
+    render(<App />)
+
+    const finished = await screen.findByRole('button', { name: /old-invoice\.pdf/ })
+    // In-flight jobs are listed but not clickable.
+    expect(screen.getByText('in-flight.pdf')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /in-flight\.pdf/ })).toBeNull()
+
+    await user.click(finished)
+
+    await waitFor(() => expect(client.getResult).toHaveBeenCalledWith('test-job-123'))
+    expect(await screen.findByText('Extraction results')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('old-invoice.pdf')
+    // Table is the default view and carries the evidence quote.
+    expect(screen.getByText('Invoice INV-001 dated')).toBeInTheDocument()
+    expect(screen.getByText('1 of 2 values grounded')).toBeInTheDocument()
   })
 })

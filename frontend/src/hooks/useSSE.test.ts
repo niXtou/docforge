@@ -68,6 +68,21 @@ describe('useSSE', () => {
     expect(result.current.events[0].node).toBe('parse')
   })
 
+  it('appends retry events and stays streaming', () => {
+    const { result } = renderHook(() => useSSE('/api/extract/job1/stream'))
+    const retry: StreamEvent = {
+      event: 'retry',
+      node: 'validate',
+      message: 'Attempt 1 failed validation — retrying',
+      timestamp: '2026-01-01T00:00:01Z',
+      data: { attempt: 1, errors: ["Required field 'total_amount' is missing or empty"] },
+    }
+    act(() => MockEventSource.current!.emit('retry', retry))
+    expect(result.current.status).toBe('streaming')
+    expect(result.current.events[0].event).toBe('retry')
+    expect(MockEventSource.current!.close).not.toHaveBeenCalled()
+  })
+
   it('moves to done on done event and closes the connection', () => {
     const { result } = renderHook(() => useSSE('/api/extract/job1/stream'))
     const doneEvent: StreamEvent = {

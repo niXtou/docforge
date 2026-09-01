@@ -15,18 +15,23 @@ const NODES = [
 
 type NodeId = (typeof NODES)[number]['id']
 
+// Nodes that run again on every retry pass (validate → extract loop).
+const LOOP_NODES: ReadonlySet<string> = new Set(['extract', 'consolidate', 'verify_grounding', 'validate', 'finalize'])
+
 const MAX_RETRIES = 3
 const STICK_THRESHOLD_PX = 24
 
-type RowState = 'done' | 'active' | 'pending' | 'success' | 'error'
+type RowState = 'done' | 'active' | 'pending' | 'success' | 'error' | 'retry' | 'retry-detail'
 
 interface LogRow {
   key: string
-  bullet: '▸' | '●' | '✓' | '✕' | '·'
+  bullet: '▸' | '●' | '✓' | '✕' | '·' | '↻' | ' '
   offset: string
   node: string
   message: string
   state: RowState
+  /** Full text for a truncated message — rendered as the row's title attribute */
+  title?: string
 }
 
 const ROW_TEXT: Record<RowState, string> = {
@@ -35,6 +40,8 @@ const ROW_TEXT: Record<RowState, string> = {
   pending: 'text-[var(--color-ink-quaternary)]',
   success: 'text-[var(--color-ember-400)]',
   error: 'text-[var(--color-rust-400)]',
+  retry: 'text-[var(--color-amber-400)]',
+  'retry-detail': 'text-[var(--color-amber-400)]/70 text-[12px]',
 }
 
 const ROW_BULLET: Record<RowState, string> = {
@@ -43,6 +50,8 @@ const ROW_BULLET: Record<RowState, string> = {
   pending: 'text-[var(--color-ink-quaternary)]',
   success: 'text-[var(--color-ember-500)]',
   error: 'text-[var(--color-rust-500)]',
+  retry: 'text-[var(--color-amber-400)]',
+  'retry-detail': '',
 }
 
 interface Props {
@@ -58,6 +67,39 @@ function formatOffset(ms: number): string {
   return `+${m}:${s}`
 }
 
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+function stringList(data: Record<string, unknown> | null, key: string): string[] | null {
+  const value = data?.[key]
+  return Array.isArray(value) ? value.map(String) : null
+}
+
+/** Human message for a completed node — what happened, not just that it finished. */
+function nodeMessage(e: StreamEvent): string {
+  const data = e.data
+  switch (e.node) {
+    case 'chunk':
+    case 'extract': {
+      const n = data?.chunks
+      return typeof n === 'number' ? plural(n, 'chunk') : e.message
+    }
+    case 'verify_grounding': {
+      const issues = stringList(data, 'issues')
+      if (issues === null) return e.message
+      return issues.length === 0 ? 'all values grounded' : `${issues.length} rejected`
+    }
+    case 'validate': {
+      const errors = stringList(data, 'errors')
+      if (errors === null) return e.message
+      return errors.length === 0 ? 'ok' : plural(errors.length, 'issue')
+    }
+    default:
+      return e.message
+  }
+}
+
 interface DerivedLog {
   rows: LogRow[]
   activeNode: NodeId | null
@@ -66,12 +108,28 @@ interface DerivedLog {
 
 function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null): DerivedLog {
   const nodeEvents = events.filter((e) => e.event === 'node_completed' && e.node)
+  const retryEvents = events.filter((e) => e.event === 'retry')
   const doneEvent = events.find((e) => e.event === 'done') ?? null
   const errorMsg = events.find((e) => e.event === 'error')?.message ?? error
 
   const t0 = events[0] ? new Date(events[0].timestamp).getTime() : null
-  const completed = new Set<string>(nodeEvents.map((e) => e.node!))
-  const retryCount = nodeEvents.filter((e) => e.node === 'validate').length - 1
+  const offsetOf = (e: StreamEvent) =>
+    t0 !== null ? formatOffset(new Date(e.timestamp).getTime() - t0) : '+00:00.0'
+
+  // Prefer explicit retry events; fall back to counting validate passes for
+  // streams from a backend that does not emit them.
+  const validatePasses = nodeEvents.filter((e) => e.node === 'validate').length
+  const retryCount = retryEvents.length > 0 ? retryEvents.length : Math.max(0, validatePasses - 1)
+
+  // "Completed" for the purpose of what runs next: after a retry the loop
+  // nodes run again, so only completions since the last retry count for them.
+  const lastRetryIdx = events.findLastIndex((e) => e.event === 'retry')
+  const completed = new Set<string>()
+  events.forEach((e, i) => {
+    if (e.event !== 'node_completed' || !e.node) return
+    if (LOOP_NODES.has(e.node) && i < lastRetryIdx) return
+    completed.add(e.node)
+  })
 
   const activeNode: NodeId | null =
     status === 'streaming' || status === 'connecting'
@@ -86,16 +144,38 @@ function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null
 
   const rows: LogRow[] = []
 
-  nodeEvents.forEach((e, i) => {
-    const offset = t0 !== null ? formatOffset(new Date(e.timestamp).getTime() - t0) : '+00:00.0'
-    rows.push({
-      key: `node-${i}-${e.node}`,
-      bullet: '▸',
-      offset,
-      node: e.node!,
-      message: e.message,
-      state: 'done',
-    })
+  events.forEach((e, i) => {
+    if (e.event === 'node_completed' && e.node) {
+      rows.push({
+        key: `node-${i}-${e.node}`,
+        bullet: '▸',
+        offset: offsetOf(e),
+        node: e.node,
+        message: nodeMessage(e),
+        state: 'done',
+      })
+    } else if (e.event === 'retry') {
+      const attempt = typeof e.data?.attempt === 'number' ? e.data.attempt : retryEvents.indexOf(e) + 1
+      rows.push({
+        key: `retry-${i}`,
+        bullet: '↻',
+        offset: offsetOf(e),
+        node: 'retry',
+        message: `attempt ${attempt} failed — retrying`,
+        state: 'retry',
+      })
+      for (const [j, err] of (stringList(e.data, 'errors') ?? []).entries()) {
+        rows.push({
+          key: `retry-${i}-err-${j}`,
+          bullet: ' ',
+          offset: '',
+          node: '',
+          message: `↳ ${err}`,
+          title: err,
+          state: 'retry-detail',
+        })
+      }
+    }
   })
 
   if (activeNode && !doneEvent && status !== 'error') {
@@ -117,11 +197,10 @@ function buildLog(events: StreamEvent[], status: SSEStatus, error: string | null
   }
 
   if (doneEvent) {
-    const offset = t0 !== null ? formatOffset(new Date(doneEvent.timestamp).getTime() - t0) : ''
     rows.push({
       key: 'done',
       bullet: '✓',
-      offset,
+      offset: t0 !== null ? offsetOf(doneEvent) : '',
       node: 'done',
       message: doneEvent.message || 'extraction complete',
       state: 'success',
@@ -222,6 +301,7 @@ export function ExtractionProgress({ events, status, error }: Props) {
           return (
             <div
               key={row.key}
+              title={row.title}
               className={`grid grid-cols-[1ch_minmax(0,7ch)_minmax(0,12ch)_1fr] gap-x-3 ${ROW_TEXT[row.state]} ${
                 row.state !== 'pending' && isLast ? 'row-enter' : ''
               }`}
