@@ -21,7 +21,9 @@ is what allows `ExtractionResult.model_validate(job_orm_object)` to work.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+from pydantic import BaseModel, Field, field_validator
 
 # ── Request Models ────────────────────────────────────────────────────────────
 # These describe what the client sends to the API.
@@ -35,6 +37,27 @@ class SchemaCreate(BaseModel):
     json_schema: dict[str, object] = Field(
         ..., description="JSON Schema defining the extraction target"
     )
+
+    @field_validator("json_schema")
+    @classmethod
+    def _check_json_schema(cls, value: dict[str, object]) -> dict[str, object]:
+        """Reject schemas the workflow could not extract against.
+
+        Runs the JSON-Schema meta-validation, then requires an object schema
+        with at least one property — the extraction prompt, consolidate and
+        validate nodes all key off ``properties``. Extension keys such as
+        ``x-doc-type`` are allowed and passed through untouched.
+        """
+        try:
+            Draft202012Validator.check_schema(value)
+        except SchemaError as e:
+            raise ValueError(f"Invalid JSON Schema: {e.message}") from e
+        if value.get("type") != "object":
+            raise ValueError("json_schema must have type 'object'")
+        properties = value.get("properties")
+        if not isinstance(properties, dict) or not properties:
+            raise ValueError("json_schema must define a non-empty 'properties' object")
+        return value
 
 
 class ExtractionRequest(BaseModel):

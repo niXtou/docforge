@@ -61,13 +61,49 @@ async def test_create_schema_duplicate_409(client: AsyncClient) -> None:
     payload = {
         "name": "Duplicate Schema",
         "description": "",
-        "json_schema": {"type": "object", "properties": {}},
+        "json_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
     }
     first = await client.post("/api/schemas", json=payload)
     assert first.status_code == 201
 
     second = await client.post("/api/schemas", json=payload)
     assert second.status_code == 409
+
+
+async def test_create_schema_rejects_invalid_json_schema(client: AsyncClient) -> None:
+    """POST /api/schemas returns 422 for schemas the workflow could not extract against."""
+    bad_payloads = [
+        # Not an object schema.
+        {"type": "array", "items": {"type": "string"}},
+        # Object with no properties.
+        {"type": "object", "properties": {}},
+        # Fails JSON-Schema meta-validation (type must be a known type name).
+        {"type": "object", "properties": {"a": {"type": "strng"}}},
+    ]
+    for i, json_schema in enumerate(bad_payloads):
+        response = await client.post(
+            "/api/schemas",
+            json={"name": f"Bad Schema {i}", "description": "", "json_schema": json_schema},
+        )
+        assert response.status_code == 422, json_schema
+        assert "json_schema" in str(response.json()["detail"])
+
+
+async def test_create_schema_accepts_doc_type_extension(client: AsyncClient) -> None:
+    """A valid object schema carrying x-doc-type is stored with the key intact."""
+    payload = {
+        "name": "Custom Invoice",
+        "description": "Custom",
+        "json_schema": {
+            "type": "object",
+            "x-doc-type": "invoice",
+            "properties": {"invoice_number": {"type": "string"}},
+            "required": ["invoice_number"],
+        },
+    }
+    response = await client.post("/api/schemas", json=payload)
+    assert response.status_code == 201
+    assert response.json()["json_schema"]["x-doc-type"] == "invoice"
 
 
 async def test_builtin_schema_seeding(db_session: AsyncSession) -> None:
