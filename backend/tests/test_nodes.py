@@ -9,8 +9,11 @@ from pytest import MonkeyPatch
 
 from app.core.config import settings
 from app.workflows.nodes import (
+    GroundingBatchJudgment,
+    GroundingVerdict,
     _dedupe_preserve_order,
     _drop_citation_duplicates,
+    _find_verbatim_quote,
     _merge_chunks,
     _strip_running_headers,
     chunk_text,
@@ -105,12 +108,25 @@ async def test_consolidate_scalar_falls_back_when_primary_missing() -> None:
 
 
 def _mock_get_llm(monkeypatch: MonkeyPatch, supported: bool) -> MagicMock:
-    """Patch get_llm so the grounding judge returns a fixed verdict."""
-    judgment = MagicMock()
-    judgment.supported = supported
-    judgment.evidence = "" if not supported else "found"
+    """Patch get_llm so the grounding judge answers every candidate with one verdict.
+
+    The batched judge receives a numbered list; this mock reads the candidate
+    count from the prompt and returns a verdict per index.
+    """
+
+    async def fake_ainvoke(prompt: str) -> GroundingBatchJudgment:
+        count = prompt.count("\n", prompt.index("Candidates:")) + 1
+        return GroundingBatchJudgment(
+            verdicts=[
+                GroundingVerdict(
+                    index=i, supported=supported, evidence="found" if supported else ""
+                )
+                for i in range(count)
+            ]
+        )
+
     chain = MagicMock()
-    chain.ainvoke = AsyncMock(return_value=judgment)
+    chain.ainvoke = AsyncMock(side_effect=fake_ainvoke)
     llm = MagicMock()
     llm.with_structured_output.return_value = chain
     monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
@@ -128,6 +144,7 @@ async def test_grounding_nulls_value_judge_rejects(monkeypatch: MonkeyPatch) -> 
     result = await verify_grounding(state)
     assert result["consolidated"]["full_name"] is None  # hallucinated name removed
     assert result["grounding_issues"]  # an issue was recorded
+    assert result["evidence"]["full_name"] == {"quote": "", "method": "judge", "supported": False}
     chain.ainvoke.assert_awaited()  # judge was consulted for the absent value
 
 
@@ -142,7 +159,147 @@ async def test_grounding_tier1_verbatim_skips_judge(monkeypatch: MonkeyPatch) ->
     result = await verify_grounding(state)
     assert result["consolidated"]["full_name"] == "Alice Real"  # kept
     assert not result["grounding_issues"]
+    assert result["evidence"]["full_name"]["method"] == "verbatim"
+    assert result["evidence"]["skills[0]"]["method"] == "verbatim"
     chain.ainvoke.assert_not_awaited()  # Tier-1 hit: judge never called
+
+
+def test_find_verbatim_quote_ignores_case_and_whitespace() -> None:
+    """A value matches across case and whitespace differences; the quote has context."""
+    source = "Prepared by the team.\n\nAuthor:   ALICE\n   real, senior engineer at Acme."
+    quote = _find_verbatim_quote("Alice Real", source)
+    assert quote is not None
+    assert "ALICE real" in quote  # the document's own spelling, whitespace collapsed
+    assert "Author:" in quote and "senior engineer" in quote  # surrounding context kept
+    assert "\n" not in quote
+    assert _find_verbatim_quote("Bob Nobody", source) is None
+
+
+def test_find_verbatim_quote_trims_context_to_word_boundaries() -> None:
+    """Context on either side never starts or ends mid-word."""
+    words = " ".join(f"word{i}" for i in range(40))
+    source = f"{words} TARGET {words}"
+    quote = _find_verbatim_quote("target", source)
+    assert quote is not None
+    head, _, tail = quote.partition("TARGET")
+    assert head.split()[0].startswith("word")
+    assert tail.split()[-1].startswith("word")
+    assert len(quote) < len(source)
+
+
+async def test_grounding_numeric_verbatim_and_unverified(monkeypatch: MonkeyPatch) -> None:
+    """Numbers found literally get a verbatim quote; reformatted ones stay, unverified."""
+    chain = _mock_get_llm(monkeypatch, supported=False)
+    state = _state(
+        schema_definition=NUMERIC_SCHEMA,
+        raw_content="Invoice 001\nAmount due: 1250.00 EUR\nItems: 3",
+        consolidated={"invoice_number": "001", "total_amount": 1250.0, "items": 7},
+    )
+    result = await verify_grounding(state)
+    assert result["consolidated"]["total_amount"] == 1250.0
+    assert result["consolidated"]["items"] == 7  # never nulled — left to schema validation
+    assert result["evidence"]["total_amount"]["method"] == "verbatim"
+    assert "1250.0" in result["evidence"]["total_amount"]["quote"]
+    assert result["evidence"]["items"] == {"quote": "", "method": "unverified", "supported": True}
+    chain.ainvoke.assert_not_awaited()  # numbers are never sent to the judge
+
+
+async def test_grounding_drops_rejected_array_item_with_evidence(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A judge-rejected array item is dropped; the evidence map records why."""
+
+    async def fake_ainvoke(prompt: str) -> GroundingBatchJudgment:
+        return GroundingBatchJudgment(
+            verdicts=[
+                GroundingVerdict(index=0, supported=True, evidence="Jane Doe, PhD"),
+                GroundingVerdict(index=1, supported=False, evidence=""),
+            ]
+        )
+
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+    llm = MagicMock()
+    llm.with_structured_output.return_value = chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
+
+    state = _state(
+        schema_definition=CV_SCHEMA,
+        raw_content="Paper by Jane Doe, PhD and Ann Lee.",
+        consolidated={"skills": ["J. Doe", "Ghost Writer", "Ann Lee"]},
+    )
+    result = await verify_grounding(state)
+    assert result["consolidated"]["skills"] == ["J. Doe", "Ann Lee"]
+    assert result["grounding_issues"] == [
+        "Field 'skills': value 'Ghost Writer' is not supported by the document"
+    ]
+    assert result["evidence"]["skills[0]"] == {
+        "quote": "Jane Doe, PhD",
+        "method": "judge",
+        "supported": True,
+    }
+    assert result["evidence"]["skills[1]"] == {"quote": "", "method": "judge", "supported": False}
+    assert result["evidence"]["skills[2]"]["method"] == "verbatim"
+
+
+async def test_grounding_missing_verdict_keeps_value_unverified(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A candidate the judge returned no verdict for is kept and marked unverified."""
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(return_value=GroundingBatchJudgment(verdicts=[]))
+    llm = MagicMock()
+    llm.with_structured_output.return_value = chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
+
+    state = _state(
+        schema_definition=CV_SCHEMA,
+        raw_content="Resume of Alice Real.",
+        consolidated={"full_name": "A. Real", "skills": ["Rust"]},
+    )
+    result = await verify_grounding(state)
+    assert result["consolidated"] == {"full_name": "A. Real", "skills": ["Rust"]}  # untouched
+    assert result["grounding_issues"] == []
+    assert result["evidence"]["full_name"] == {
+        "quote": "",
+        "method": "unverified",
+        "supported": True,
+    }
+    assert result["evidence"]["skills[0]"]["method"] == "unverified"
+
+
+async def test_grounding_batches_judge_calls(monkeypatch: MonkeyPatch) -> None:
+    """Flagged values are split into judge calls of at most grounding_batch_size."""
+    prompts: list[str] = []
+
+    async def fake_ainvoke(prompt: str) -> GroundingBatchJudgment:
+        prompts.append(prompt)
+        count = prompt.count("\n", prompt.index("Candidates:")) + 1
+        return GroundingBatchJudgment(
+            verdicts=[
+                GroundingVerdict(index=i, supported=True, evidence="ok") for i in range(count)
+            ]
+        )
+
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+    llm = MagicMock()
+    llm.with_structured_output.return_value = chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
+    monkeypatch.setattr(settings, "grounding_batch_size", 2)
+
+    state = _state(
+        schema_definition=CV_SCHEMA,
+        raw_content="Nothing here matches.",
+        consolidated={"skills": [f"skill-{i}" for i in range(5)]},
+    )
+    result = await verify_grounding(state)
+
+    assert chain.ainvoke.await_count == 3  # 5 values / batch of 2 → 3 calls
+    assert [p.count("field 'skills'") for p in prompts] == [2, 2, 1]
+    assert all(p.count("Document:") == 1 for p in prompts)  # document sent once per batch
+    assert result["consolidated"]["skills"] == [f"skill-{i}" for i in range(5)]
+    assert all(result["evidence"][f"skills[{i}]"]["method"] == "judge" for i in range(5))
 
 
 async def test_validate_catches_type_mismatch() -> None:

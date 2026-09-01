@@ -42,6 +42,8 @@ async def test_graph_happy_path(tmp_path: Path, monkeypatch: MonkeyPatch) -> Non
     assert result["final_result"] is not None
     assert result["status"] == "completed"
     assert result["retry_count"] == 0
+    assert result["evidence"]["invoice_number"]["method"] == "verbatim"
+    assert result["evidence"]["line_items[0]"]["method"] == "verbatim"
 
 
 async def test_retry_loop_fires(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -163,7 +165,7 @@ async def test_fabricated_author_rejected_then_recovered(
     field is nulled, validation fails (required 'authors' now empty), and the
     retry produces the real byline author — which IS present and passes.
     """
-    from app.workflows.nodes import GroundingJudgment
+    from app.workflows.nodes import GroundingBatchJudgment, GroundingVerdict
 
     doc = tmp_path / "paper.txt"
     doc.write_text(
@@ -182,11 +184,11 @@ async def test_fabricated_author_rejected_then_recovered(
             "abstract": "We study quantum methods in detail.",
         }
 
-    async def judge_invoke(_prompt: Any) -> Any:
-        verdict = MagicMock()
-        verdict.supported = False  # the fabricated value is unsupported
-        verdict.evidence = ""
-        return verdict
+    async def judge_invoke(_prompt: Any) -> GroundingBatchJudgment:
+        # The fabricated value is the only candidate (title/abstract are verbatim).
+        return GroundingBatchJudgment(
+            verdicts=[GroundingVerdict(index=0, supported=False, evidence="")]
+        )
 
     extract_chain = MagicMock()
     extract_chain.ainvoke = extract_invoke
@@ -196,7 +198,7 @@ async def test_fabricated_author_rejected_then_recovered(
     def route_structured_output(arg: Any) -> MagicMock:
         # The grounding judge binds the GroundingJudgment model; extract binds
         # the user schema dict. Route each to its own mock chain.
-        return judge_chain if arg is GroundingJudgment else extract_chain
+        return judge_chain if arg is GroundingBatchJudgment else extract_chain
 
     mock_llm = MagicMock()
     mock_llm.with_structured_output.side_effect = route_structured_output
@@ -212,3 +214,7 @@ async def test_fabricated_author_rejected_then_recovered(
     assert result["final_result"]["authors"] == ["Jane Doe"]
     assert result["status"] == "completed"
     assert result["retry_count"] >= 1
+    # Evidence reflects the final (successful) grounding pass.
+    assert result["evidence"]["authors[0]"]["method"] == "verbatim"
+    assert "Jane Doe" in result["evidence"]["authors[0]"]["quote"]
+    assert result["evidence"]["title"]["supported"] is True

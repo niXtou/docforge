@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # Max chunk/grounding LLM calls run concurrently within a node. Higher = faster
     # on large documents, but more simultaneous load on the provider's rate limit.
     extract_concurrency: int = Field(default=5)
+    # How many not-found-verbatim values the grounding judge checks per LLM call.
+    # The document is sent once per batch, so larger batches cost fewer tokens;
+    # smaller batches keep each verdict list short enough for the model to stay
+    # accurate.
+    grounding_batch_size: int = Field(default=15)
 
     # ── LLM Providers ─────────────────────────────────────────────────────────
     # All LLM calls go through OpenRouter, which is a unified gateway for models
