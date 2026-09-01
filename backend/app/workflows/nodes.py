@@ -505,8 +505,10 @@ async def verify_grounding(state: WorkflowState) -> dict[str, Any]:
 
     Returns ``consolidated`` (refined), ``grounding_issues`` (folded into the
     retry feedback by validate) and ``evidence`` — a provenance map keyed by
-    field name (or ``field[idx]`` for array items) holding
-    ``{"quote", "method", "supported"}`` for every checked value.
+    field name (or ``field[idx]`` for array items, indexed by the item's
+    position in the *returned* array) holding ``{"quote", "method",
+    "supported"}`` for every checked value. Array items the judge rejected are
+    keyed ``field[dropped:<original idx>]``.
     """
     consolidated: dict[str, Any] = dict(state.consolidated or {})
     source = state.raw_content
@@ -591,10 +593,22 @@ async def verify_grounding(state: WorkflowState) -> dict[str, Any]:
             else:
                 drop_items.setdefault(field, set()).add(list_index)
 
+    # Drop rejected items and re-key the survivors' evidence to their FINAL
+    # positions, so evidence["skills[1]"] always describes data["skills"][1].
+    # Rejected items move to "field[dropped:<original idx>]" — kept for the
+    # record, but out of the way of the index-aligned keys.
     for field, indices in drop_items.items():
-        consolidated[field] = [
-            item for i, item in enumerate(consolidated[field]) if i not in indices
-        ]
+        kept: list[Any] = []
+        for i, item in enumerate(consolidated[field]):
+            entry = evidence.pop(f"{field}[{i}]", None)
+            if i in indices:
+                if entry is not None:
+                    evidence[f"{field}[dropped:{i}]"] = entry
+                continue
+            if entry is not None:
+                evidence[f"{field}[{len(kept)}]"] = entry
+            kept.append(item)
+        consolidated[field] = kept
 
     if issues:
         logger.warning("Grounding rejected %d value(s)", len(issues))

@@ -207,7 +207,7 @@ async def test_grounding_numeric_verbatim_and_unverified(monkeypatch: MonkeyPatc
 async def test_grounding_drops_rejected_array_item_with_evidence(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """A judge-rejected array item is dropped; the evidence map records why."""
+    """A judge-rejected array item is dropped; evidence stays aligned with the final array."""
 
     async def fake_ainvoke(prompt: str) -> GroundingBatchJudgment:
         return GroundingBatchJudgment(
@@ -238,8 +238,15 @@ async def test_grounding_drops_rejected_array_item_with_evidence(
         "method": "judge",
         "supported": True,
     }
-    assert result["evidence"]["skills[1]"] == {"quote": "", "method": "judge", "supported": False}
-    assert result["evidence"]["skills[2]"]["method"] == "verbatim"
+    # Survivors are re-keyed to their final positions; the rejected one is parked.
+    assert result["evidence"]["skills[1]"]["method"] == "verbatim"  # Ann Lee, was index 2
+    assert "Ann Lee" in result["evidence"]["skills[1]"]["quote"]
+    assert result["evidence"]["skills[dropped:1]"] == {
+        "quote": "",
+        "method": "judge",
+        "supported": False,
+    }
+    assert "skills[2]" not in result["evidence"]
 
 
 async def test_grounding_missing_verdict_keeps_value_unverified(
