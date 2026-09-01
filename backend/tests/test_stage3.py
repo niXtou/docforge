@@ -494,6 +494,73 @@ async def test_result_exposes_validation_errors_and_evidence(
     assert body["evidence"] == {"field1": {"quote": "", "method": "judge", "supported": False}}
 
 
+async def test_list_jobs_newest_first_without_secrets(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """GET /api/extract lists jobs newest first with schema names and no api_key/file_path."""
+    from datetime import timedelta
+
+    base = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=365)
+    older_id, newer_id = str(uuid.uuid4()), str(uuid.uuid4())
+    db_session.add_all(
+        [
+            ExtractionJob(
+                id=older_id,
+                schema_id=seeded_schema.id,
+                status="completed",
+                original_filename="older.pdf",
+                file_type=".pdf",
+                model_used="google/gemini-3.1-flash-lite",
+                validation_passed=True,
+                retries_used=1,
+                processing_time_ms=500,
+                created_at=base,
+                completed_at=base,
+                file_path="/tmp/should-not-leak",
+                api_key="sk-should-not-leak",
+            ),
+            ExtractionJob(
+                id=newer_id,
+                schema_id=seeded_schema.id,
+                status="processing",
+                original_filename="newer.txt",
+                file_type=".txt",
+                model_used="openai/gpt-5.4-nano",
+                created_at=base + timedelta(minutes=1),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/extract", params={"limit": 2})
+    assert response.status_code == 200
+    body = response.json()
+    assert [j["job_id"] for j in body] == [newer_id, older_id]
+
+    newer, older = body
+    assert newer["schema_name"] == seeded_schema.name
+    assert newer["status"] == "processing"
+    assert newer["validation_passed"] is None and newer["completed_at"] is None
+    assert older == {
+        "job_id": older_id,
+        "status": "completed",
+        "schema_name": seeded_schema.name,
+        "original_filename": "older.pdf",
+        "model_used": "google/gemini-3.1-flash-lite",
+        "created_at": older["created_at"],
+        "completed_at": older["completed_at"],
+        "processing_time_ms": 500,
+        "retries_used": 1,
+        "validation_passed": True,
+    }
+    assert "api_key" not in response.text and "file_path" not in response.text
+    assert "should-not-leak" not in response.text
+
+    # limit is validated: 0 and 101 are rejected.
+    assert (await client.get("/api/extract", params={"limit": 0})).status_code == 422
+    assert (await client.get("/api/extract", params={"limit": 101})).status_code == 422
+
+
 async def test_result_pending_job_409(
     client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
 ) -> None:

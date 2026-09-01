@@ -108,6 +108,25 @@ class ExtractionJobResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ExtractionJobSummary(BaseModel):
+    """One row of the job history list (GET /api/extract).
+
+    Deliberately excludes the extracted data, the temp file path and the BYOK
+    api_key — this is a listing, not a result.
+    """
+
+    job_id: str
+    status: str
+    schema_name: str
+    original_filename: str
+    model_used: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    processing_time_ms: int | None = None
+    retries_used: int
+    validation_passed: bool | None = None  # None until the workflow has run
+
+
 class FieldEvidence(BaseModel):
     """Provenance for one extracted value: where in the document it was verified.
 
