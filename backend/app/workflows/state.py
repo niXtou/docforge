@@ -32,6 +32,8 @@ FIELD GROUPS AT A GLANCE
   Output     — set by merge_extractions at the very end
 """
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -65,6 +67,10 @@ class WorkflowState(BaseModel):
     last_validation_errors: list[str] = []  # populated by validate_extraction on failure;
     # prepended to the LLM prompt on the next retry
     grounding_issues: list[str] = []  # set by verify_grounding; folded into the retry feedback
+    # Per-value provenance, set by verify_grounding. Keyed by field name for
+    # scalars and "field[idx]" for array items; each value is
+    # {"quote": str, "method": "verbatim" | "judge" | "unverified", "supported": bool}.
+    evidence: dict[str, Any] = {}
 
     # ── Output ────────────────────────────────────────────────────────────────
     # Set by merge_extractions at the end of the graph run.

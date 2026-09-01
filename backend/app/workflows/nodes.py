@@ -393,105 +393,233 @@ async def consolidate(state: WorkflowState) -> dict[str, Any]:
     return {"consolidated": merged}
 
 
-class GroundingJudgment(BaseModel):
-    """Structured verdict from the LLM grounding judge for one value."""
+class GroundingVerdict(BaseModel):
+    """The judge's verdict for one numbered candidate value in a batch."""
 
+    index: int = Field(description="The 0-based number of the candidate value this verdict is for")
     supported: bool = Field(description="True if the value is supported by the document text")
     evidence: str = Field(description="A short quote from the document that supports it, or empty")
 
 
-def _normalize(text: str) -> str:
-    """Lowercase and collapse all whitespace runs to single spaces for matching."""
-    return re.sub(r"\s+", " ", text).strip().lower()
+class GroundingBatchJudgment(BaseModel):
+    """Structured verdicts from the LLM grounding judge for a batch of values."""
 
-
-async def _judge(llm_chain: Any, field: str, value: str, source: str) -> GroundingJudgment:
-    """Ask the LLM whether ``value`` for ``field`` is supported by ``source``."""
-    prompt = (
-        f"Document:\n{source}\n\n"
-        f"A system extracted the value below for the field '{field}'. Decide whether the "
-        f"document actually supports this exact value. Answer supported=false if it was "
-        f"inferred, guessed, or taken from an unrelated part of the document (e.g. a cited "
-        f"author rather than the document's own author).\n\n"
-        f"Value: {value}"
+    verdicts: list[GroundingVerdict] = Field(
+        description="One verdict per candidate value, in any order; indices must match"
     )
-    return await llm_chain.ainvoke(prompt)
+
+
+# Characters of surrounding document text kept on each side of a verbatim match.
+_QUOTE_CONTEXT_CHARS = 60
+
+
+def _find_verbatim_quote(value: str, source: str) -> str | None:
+    """Locate ``value`` in ``source`` and return it with a little surrounding context.
+
+    Matching is case-insensitive and whitespace-insensitive: the value is split
+    into whitespace-separated tokens which may be separated by any whitespace run
+    in the source (so "Alice  Real" matches "alice\nreal"). The returned quote is
+    the matched text plus up to ``_QUOTE_CONTEXT_CHARS`` on each side, trimmed to
+    word boundaries and whitespace-collapsed. Returns None when not found.
+    """
+    tokens = value.split()
+    if not tokens:
+        return None
+    pattern = r"\s+".join(re.escape(token) for token in tokens)
+    match = re.search(pattern, source, flags=re.IGNORECASE)
+    if match is None:
+        return None
+
+    start = max(0, match.start() - _QUOTE_CONTEXT_CHARS)
+    end = min(len(source), match.end() + _QUOTE_CONTEXT_CHARS)
+    # Trim the context window to word boundaries so quotes don't start or end
+    # mid-word. The match itself is always kept intact.
+    if start > 0:
+        lead = re.search(r"\s", source[start : match.start()])
+        start = start + lead.end() if lead else match.start()
+    if end < len(source):
+        trail = re.search(r"\s\S*$", source[match.end() : end])
+        end = match.end() + trail.start() if trail else match.end()
+    return re.sub(r"\s+", " ", source[start:end]).strip()
+
+
+def _read_verdicts(judgment: Any) -> dict[int, tuple[bool, str]]:
+    """Normalise a batch judgment (model or dict) into ``{index: (supported, evidence)}``.
+
+    Tolerates a partial or malformed response: verdicts without a usable index
+    are skipped, and callers treat a missing index as "could not verify".
+    """
+    if judgment is None:
+        # Structured output can come back as None when the model fails to produce
+        # parseable JSON. Treat it as "no verdicts": every candidate stays
+        # unverified rather than the whole extraction failing.
+        return {}
+    raw_verdicts: Any = (
+        judgment.get("verdicts", [])
+        if isinstance(judgment, dict)
+        else getattr(judgment, "verdicts", None) or []
+    )
+    verdicts: dict[int, tuple[bool, str]] = {}
+    for verdict in raw_verdicts:
+        if isinstance(verdict, dict):
+            index: Any = verdict.get("index")
+            supported = bool(verdict.get("supported", False))
+            evidence = str(verdict.get("evidence") or "")
+        else:
+            index = getattr(verdict, "index", None)
+            supported = bool(getattr(verdict, "supported", False))
+            evidence = str(getattr(verdict, "evidence", None) or "")
+        if isinstance(index, int) and index not in verdicts:
+            verdicts[index] = (supported, evidence)
+    return verdicts
+
+
+def _judge_prompt(candidates: list[tuple[str, str]], source: str) -> str:
+    """Build the batched grounding prompt: the document once, then numbered candidates."""
+    listing = "\n".join(
+        f"{i}. field '{field}': {value}" for i, (field, value) in enumerate(candidates)
+    )
+    return (
+        f"Document:\n{source}\n\n"
+        "A system extracted the numbered values below from this document. For EACH one, "
+        "decide whether the document actually supports that exact value. Answer "
+        "supported=false if it was inferred, guessed, or taken from an unrelated part of "
+        "the document (e.g. a cited author rather than the document's own author). Return "
+        "one verdict per candidate, using the candidate's number as its index, with a short "
+        "supporting quote from the document when supported.\n\n"
+        f"Candidates:\n{listing}"
+    )
 
 
 async def verify_grounding(state: WorkflowState) -> dict[str, Any]:
-    """Check that each extracted string value is actually supported by the source.
+    """Check that each extracted value is actually supported by the source.
 
     Two tiers, cheapest first:
-      1. Verbatim presence — if the normalized value appears in the normalized
-         source text, it is grounded for free (no LLM call).
-      2. LLM judge — values not found verbatim are sent to the model, which
-         decides whether the document supports them (catching, e.g., a cited
-         author mistaken for the byline). Rejected values are nulled out and an
-         issue is recorded.
+      1. Verbatim presence — if the value appears in the source text (case- and
+         whitespace-insensitively), it is grounded for free (no LLM call) and
+         the surrounding snippet becomes its evidence quote.
+      2. LLM judge — string values not found verbatim are sent to the model in
+         batches of ``settings.grounding_batch_size`` (the document is sent once
+         per batch, not once per value). The judge decides whether the document
+         supports each one, catching e.g. a cited author mistaken for the
+         byline. Rejected values are nulled out / dropped and an issue is
+         recorded. A value the judge failed to return a verdict for is KEPT and
+         marked ``unverified`` — an incomplete judge never destroys data.
 
-    Only string scalars and string array items are checked — numbers/dates are
-    frequently reformatted, so verbatim matching is unreliable for them and they
-    are left to schema validation instead. Grounding issues are written to
-    ``grounding_issues``; validate folds them into the retry feedback.
+    Non-string scalars (numbers, booleans) are tried verbatim via ``str(value)``
+    since numbers often appear literally (e.g. "1250.00"); if not found they are
+    left to schema validation and marked ``unverified`` rather than judged.
+
+    Returns ``consolidated`` (refined), ``grounding_issues`` (folded into the
+    retry feedback by validate) and ``evidence`` — a provenance map keyed by
+    field name (or ``field[idx]`` for array items, indexed by the item's
+    position in the *returned* array) holding ``{"quote", "method",
+    "supported"}`` for every checked value. Array items the judge rejected are
+    keyed ``field[dropped:<original idx>]``.
     """
     consolidated: dict[str, Any] = dict(state.consolidated or {})
-    source_norm = _normalize(state.raw_content)
+    source = state.raw_content
     issues: list[str] = []
+    evidence: dict[str, dict[str, Any]] = {}
 
-    # Collect string values that are NOT present verbatim — only these need a judge.
-    to_judge: list[tuple[str, str, int | None]] = []  # (field, value, list_index or None)
+    # Values that are NOT present verbatim — only these need a judge.
+    to_judge: list[tuple[str, str, str, int | None]] = []  # (key, field, value, list_index)
+
+    def _check(key: str, field: str, value: Any, list_index: int | None) -> None:
+        if _is_empty(value):
+            return
+        if isinstance(value, str):
+            quote = _find_verbatim_quote(value, source)
+            if quote is not None:
+                evidence[key] = {"quote": quote, "method": "verbatim", "supported": True}
+            else:
+                to_judge.append((key, field, value, list_index))
+            return
+        if isinstance(value, bool | int | float):
+            quote = _find_verbatim_quote(str(value), source)
+            if quote is not None:
+                evidence[key] = {"quote": quote, "method": "verbatim", "supported": True}
+                return
+        # Numbers not found literally (reformatted), nested objects, etc. — left
+        # to schema validation, never nulled.
+        evidence[key] = {"quote": "", "method": "unverified", "supported": True}
+
     for field, value in consolidated.items():
-        if isinstance(value, str) and value.strip():
-            if _normalize(value) not in source_norm:
-                to_judge.append((field, value, None))
-        elif isinstance(value, list):
+        if isinstance(value, list):
             for idx, item in enumerate(value):
-                if isinstance(item, str) and item.strip() and _normalize(item) not in source_norm:
-                    to_judge.append((field, item, idx))
+                _check(f"{field}[{idx}]", field, item, idx)
+        else:
+            _check(field, field, value, None)
 
     if not to_judge:
-        return {"consolidated": consolidated, "grounding_issues": []}
+        return {"consolidated": consolidated, "grounding_issues": [], "evidence": evidence}
 
     llm = get_llm(model=state.model, api_key=state.api_key)
-    judge_chain = llm.with_structured_output(GroundingJudgment)
+    judge_chain = llm.with_structured_output(GroundingBatchJudgment)
 
-    # Judge all flagged values concurrently (bounded). Verdicts are applied
-    # afterwards in the original order so issue ordering stays deterministic.
+    # Judge in batches, concurrently (bounded). Verdicts are applied afterwards
+    # in the original order so issue ordering stays deterministic.
+    batch_size = max(1, settings.grounding_batch_size)
+    batches = [to_judge[i : i + batch_size] for i in range(0, len(to_judge), batch_size)]
     writer = _progress_writer()
-    total = len(to_judge)
+    total = len(batches)
     semaphore = asyncio.Semaphore(settings.extract_concurrency)
     completed = 0
     counter_lock = asyncio.Lock()
 
-    async def _judge_one(field: str, value: str) -> GroundingJudgment:
+    async def _judge_batch(
+        batch: list[tuple[str, str, str, int | None]],
+    ) -> dict[int, tuple[bool, str]]:
         nonlocal completed
+        prompt = _judge_prompt([(field, value) for _, field, value, _ in batch], source)
         async with semaphore:
-            verdict = await _judge(judge_chain, field, value, state.raw_content)
+            judgment = await judge_chain.ainvoke(prompt)
         async with counter_lock:
             completed += 1
             _emit(writer, "verify_grounding", completed, total)
-        return verdict
+        return _read_verdicts(judgment)
 
-    verdicts = await asyncio.gather(*(_judge_one(f, v) for f, v, _ in to_judge))
+    batch_verdicts = await asyncio.gather(*(_judge_batch(b) for b in batches))
 
     # Track array items to drop after iterating (don't mutate lists mid-loop).
     drop_items: dict[str, set[int]] = {}
-    for (field, value, list_index), verdict in zip(to_judge, verdicts, strict=True):
-        if not getattr(verdict, "supported", False):
+    for batch, verdicts in zip(batches, batch_verdicts, strict=True):
+        for i, (key, field, value, list_index) in enumerate(batch):
+            verdict = verdicts.get(i)
+            if verdict is None:
+                # The judge did not answer for this one — keep it, flag as unverified.
+                evidence[key] = {"quote": "", "method": "unverified", "supported": True}
+                continue
+            supported, quote = verdict
+            evidence[key] = {"quote": quote, "method": "judge", "supported": supported}
+            if supported:
+                continue
             issues.append(f"Field '{field}': value '{value}' is not supported by the document")
             if list_index is None:
                 consolidated[field] = None
             else:
                 drop_items.setdefault(field, set()).add(list_index)
 
+    # Drop rejected items and re-key the survivors' evidence to their FINAL
+    # positions, so evidence["skills[1]"] always describes data["skills"][1].
+    # Rejected items move to "field[dropped:<original idx>]" — kept for the
+    # record, but out of the way of the index-aligned keys.
     for field, indices in drop_items.items():
-        consolidated[field] = [
-            item for i, item in enumerate(consolidated[field]) if i not in indices
-        ]
+        kept: list[Any] = []
+        for i, item in enumerate(consolidated[field]):
+            entry = evidence.pop(f"{field}[{i}]", None)
+            if i in indices:
+                if entry is not None:
+                    evidence[f"{field}[dropped:{i}]"] = entry
+                continue
+            if entry is not None:
+                evidence[f"{field}[{len(kept)}]"] = entry
+            kept.append(item)
+        consolidated[field] = kept
 
     if issues:
         logger.warning("Grounding rejected %d value(s)", len(issues))
-    return {"consolidated": consolidated, "grounding_issues": issues}
+    return {"consolidated": consolidated, "grounding_issues": issues, "evidence": evidence}
 
 
 async def validate_extraction(state: WorkflowState) -> dict[str, Any]:

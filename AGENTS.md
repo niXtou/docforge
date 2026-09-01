@@ -87,7 +87,8 @@ backend/app/
 
 frontend/src/
 ├── api/                 # API client + SSE consumer
-├── components/          # React UI
+├── components/          # React UI (SchemaBuilder = create a schema in the UI,
+│                        #   RecentJobs = job history, ResultsViewer = data + evidence)
 ├── hooks/               # useSSE and friends
 └── types/               # Shared TypeScript types
 ```
@@ -96,12 +97,13 @@ Key files to read first: `backend/app/workflows/graph.py` (graph assembly), `bac
 
 ## Conventions
 
-- **Streaming**: SSE via `sse-starlette`, not WebSockets.
+- **Streaming**: SSE via `sse-starlette`, not WebSockets. Events: `node_completed` (with `keys_updated` plus per-node data — `chunk`/`extract`: `chunks`; `verify_grounding`: `issues`, `evidence_count`; `validate`: `errors`, `attempt`), `progress` (within-node `completed`/`total`), `retry` (validation failed and the graph is looping back; `attempt`, `errors`), `error`, `done`. Emitted from `services/extraction.py`; the frontend consumes them in `hooks/useSSE.ts`.
 - **LLM**: All calls go through `app/core/llm.py:get_llm()`, which returns a `ChatOpenRouter` from `langchain-openrouter`. Don't import provider SDKs directly.
 - **LangGraph state**: Pydantic `BaseModel` (not `TypedDict`) — defined in `workflows/state.py`. Each node is an async function receiving `WorkflowState` and returning a partial state dict.
-- **Conditional edges**: route on Pydantic validation. Valid → merge. Invalid + retries left → retry with validation errors injected into the prompt. Max 3 retries.
+- **Workflow**: `parse → chunk → extract → consolidate → verify_grounding → validate → finalize`. `verify_grounding` checks every value against the source: verbatim first (case/whitespace-insensitive), then a **batched** LLM judge (`GROUNDING_BATCH_SIZE` candidates per call, document sent once per batch) for the rest. Rejected values are nulled/dropped and reported as grounding issues; a candidate the judge returns no verdict for is kept and marked `unverified`. It writes `state.evidence` (`field` / `field[i]` → `{quote, method, supported}`), which `finalize` leaves untouched and the service persists as `field_evidence`.
+- **Conditional edges**: route on validation. Valid → finalize. Invalid + retries left → re-extract with the validation errors (including grounding issues) injected into the prompt. Max 3 retries. The final errors are persisted as `validation_errors`.
 - **Structured output**: use `.with_structured_output(PydanticModel)` for extraction LLM calls.
-- **Demo mode**: when `DEMO_MODE=true`, requests are validated against `DEMO_ALLOWED_MODELS` in `config.py` and rate-limited per IP via Redis (10/hour). Clients passing `X-API-Key` bypass both.
+- **Demo mode**: requests without a key are validated against `DEMO_ALLOWED_MODELS` in `config.py` and rate-limited per IP via Redis (10/hour). Clients passing their own key in the `api_key` multipart form field bypass both.
 - **No secrets in code**: env vars only, via Pydantic Settings.
 - **Library docs**: use `context7` MCP for current LangGraph / FastAPI / Pydantic / SQLAlchemy / OpenRouter docs — training data may be stale.
 

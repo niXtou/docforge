@@ -61,13 +61,49 @@ async def test_create_schema_duplicate_409(client: AsyncClient) -> None:
     payload = {
         "name": "Duplicate Schema",
         "description": "",
-        "json_schema": {"type": "object", "properties": {}},
+        "json_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
     }
     first = await client.post("/api/schemas", json=payload)
     assert first.status_code == 201
 
     second = await client.post("/api/schemas", json=payload)
     assert second.status_code == 409
+
+
+async def test_create_schema_rejects_invalid_json_schema(client: AsyncClient) -> None:
+    """POST /api/schemas returns 422 for schemas the workflow could not extract against."""
+    bad_payloads = [
+        # Not an object schema.
+        {"type": "array", "items": {"type": "string"}},
+        # Object with no properties.
+        {"type": "object", "properties": {}},
+        # Fails JSON-Schema meta-validation (type must be a known type name).
+        {"type": "object", "properties": {"a": {"type": "strng"}}},
+    ]
+    for i, json_schema in enumerate(bad_payloads):
+        response = await client.post(
+            "/api/schemas",
+            json={"name": f"Bad Schema {i}", "description": "", "json_schema": json_schema},
+        )
+        assert response.status_code == 422, json_schema
+        assert "json_schema" in str(response.json()["detail"])
+
+
+async def test_create_schema_accepts_doc_type_extension(client: AsyncClient) -> None:
+    """A valid object schema carrying x-doc-type is stored with the key intact."""
+    payload = {
+        "name": "Custom Invoice",
+        "description": "Custom",
+        "json_schema": {
+            "type": "object",
+            "x-doc-type": "invoice",
+            "properties": {"invoice_number": {"type": "string"}},
+            "required": ["invoice_number"],
+        },
+    }
+    response = await client.post("/api/schemas", json=payload)
+    assert response.status_code == 201
+    assert response.json()["json_schema"]["x-doc-type"] == "invoice"
 
 
 async def test_builtin_schema_seeding(db_session: AsyncSession) -> None:
@@ -256,6 +292,77 @@ async def test_stream_emits_node_events(
     assert "done" in body
 
 
+async def test_stream_emits_retry_event_and_persists_errors(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """A failed validate that will retry emits a `retry` event; the final errors are saved."""
+    import json
+    import tempfile
+
+    from tests.conftest import TestSessionLocal
+
+    job_id = str(uuid.uuid4())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+        f.write(b"content")
+        tmp_path = f.name
+
+    job = ExtractionJob(
+        id=job_id,
+        schema_id=seeded_schema.id,
+        status="pending",
+        original_filename="test.txt",
+        file_type=".txt",
+        model_used="google/gemini-3.1-flash-lite",
+        file_path=tmp_path,
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    errors = ["Required field 'field1' is missing or empty"]
+    evidence = {"field1": {"quote": "field1: x", "method": "verbatim", "supported": True}}
+
+    async def _fake_astream(*args: object, **kwargs: object):  # type: ignore[override]
+        yield ("updates", {"chunk": {"chunks": ["a", "b"]}})
+        yield ("updates", {"validate": {"last_validation_errors": errors, "retry_count": 1}})
+        yield ("updates", {"verify_grounding": {"grounding_issues": [], "evidence": evidence}})
+        yield ("updates", {"validate": {"last_validation_errors": [], "retry_count": 1}})
+        yield ("updates", {"finalize": {"final_result": {"field1": "x"}, "status": "completed"}})
+
+    with patch("app.services.extraction.compiled_graph") as mock_graph:
+        mock_graph.astream = _fake_astream
+        with patch("app.services.extraction.AsyncSessionLocal", TestSessionLocal):
+            response = await client.get(f"/api/extract/{job_id}/stream")
+            await asyncio.sleep(0.1)
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    by_event = [e["event"] for e in events]
+    assert by_event.count("retry") == 1
+    retry = next(e for e in events if e["event"] == "retry")
+    assert retry["node"] == "validate"
+    assert retry["data"] == {"attempt": 1, "errors": errors}
+    assert retry["message"] == "Attempt 1 failed validation — retrying"
+    # node_completed payloads carry the per-node specifics.
+    chunk = next(e for e in events if e["node"] == "chunk")
+    assert chunk["data"]["chunks"] == 2
+    grounding = next(e for e in events if e["node"] == "verify_grounding")
+    assert grounding["data"]["issues"] == [] and grounding["data"]["evidence_count"] == 1
+    validates = [e for e in events if e["event"] == "node_completed" and e["node"] == "validate"]
+    assert validates[0]["data"]["errors"] == errors and validates[0]["data"]["attempt"] == 1
+    assert validates[1]["data"]["errors"] == []
+
+    result = await client.get(f"/api/extract/{job_id}/result")
+    assert result.status_code == 200
+    body = result.json()
+    assert body["validation_passed"] is True
+    assert body["validation_errors"] == []
+    assert body["evidence"] == evidence
+
+
 async def test_api_key_purged_after_stream(
     client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
 ) -> None:
@@ -355,6 +462,103 @@ async def test_result_completed_job(
     assert body["status"] == "completed"
     assert body["data"] == {"field1": "extracted_value"}
     assert body["validation_passed"] is True
+    assert body["validation_errors"] == []  # column NULL → empty list
+    assert body["evidence"] == {}
+
+
+async def test_result_exposes_validation_errors_and_evidence(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """Persisted validation errors and field evidence come back on the result."""
+    job_id = str(uuid.uuid4())
+    job = ExtractionJob(
+        id=job_id,
+        schema_id=seeded_schema.id,
+        status="completed_with_errors",
+        original_filename="done.txt",
+        file_type=".txt",
+        model_used="google/gemini-3.1-flash-lite",
+        result_data={"field1": None},
+        validation_passed=False,
+        validation_errors=["Required field 'field1' is missing or empty"],
+        field_evidence={"field1": {"quote": "", "method": "judge", "supported": False}},
+        completed_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    response = await client.get(f"/api/extract/{job_id}/result")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation_errors"] == ["Required field 'field1' is missing or empty"]
+    assert body["evidence"] == {"field1": {"quote": "", "method": "judge", "supported": False}}
+
+
+async def test_list_jobs_newest_first_without_secrets(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """GET /api/extract lists jobs newest first with schema names and no api_key/file_path."""
+    from datetime import timedelta
+
+    base = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=365)
+    older_id, newer_id = str(uuid.uuid4()), str(uuid.uuid4())
+    db_session.add_all(
+        [
+            ExtractionJob(
+                id=older_id,
+                schema_id=seeded_schema.id,
+                status="completed",
+                original_filename="older.pdf",
+                file_type=".pdf",
+                model_used="google/gemini-3.1-flash-lite",
+                validation_passed=True,
+                retries_used=1,
+                processing_time_ms=500,
+                created_at=base,
+                completed_at=base,
+                file_path="/tmp/should-not-leak",
+                api_key="sk-should-not-leak",
+            ),
+            ExtractionJob(
+                id=newer_id,
+                schema_id=seeded_schema.id,
+                status="processing",
+                original_filename="newer.txt",
+                file_type=".txt",
+                model_used="openai/gpt-5.4-nano",
+                created_at=base + timedelta(minutes=1),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await client.get("/api/extract", params={"limit": 2})
+    assert response.status_code == 200
+    body = response.json()
+    assert [j["job_id"] for j in body] == [newer_id, older_id]
+
+    newer, older = body
+    assert newer["schema_name"] == seeded_schema.name
+    assert newer["status"] == "processing"
+    assert newer["validation_passed"] is None and newer["completed_at"] is None
+    assert older == {
+        "job_id": older_id,
+        "status": "completed",
+        "schema_name": seeded_schema.name,
+        "original_filename": "older.pdf",
+        "model_used": "google/gemini-3.1-flash-lite",
+        "created_at": older["created_at"],
+        "completed_at": older["completed_at"],
+        "processing_time_ms": 500,
+        "retries_used": 1,
+        "validation_passed": True,
+    }
+    assert "api_key" not in response.text and "file_path" not in response.text
+    assert "should-not-leak" not in response.text
+
+    # limit is validated: 0 and 101 are rejected.
+    assert (await client.get("/api/extract", params={"limit": 0})).status_code == 422
+    assert (await client.get("/api/extract", params={"limit": 101})).status_code == 422
 
 
 async def test_result_pending_job_409(

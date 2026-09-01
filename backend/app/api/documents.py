@@ -5,8 +5,10 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 
@@ -14,7 +16,14 @@ from app.api.deps import get_db
 from app.core.config import settings
 from app.core.security import require_demo_access
 from app.models.db import ExtractionJob, ExtractionSchema
-from app.models.schemas import ErrorResponse, ExtractionJobResponse, ExtractionResult, StreamEvent
+from app.models.schemas import (
+    ErrorResponse,
+    ExtractionJobResponse,
+    ExtractionJobSummary,
+    ExtractionResult,
+    FieldEvidence,
+    StreamEvent,
+)
 from app.services.extraction import create_job, stream_extraction
 
 router = APIRouter()
@@ -119,6 +128,48 @@ async def upload_document(
 
 
 @router.get(
+    "",
+    response_model=list[ExtractionJobSummary],
+    summary="List recent extraction jobs",
+    description=(
+        "Returns the most recent extraction jobs, newest first. Each entry is a summary "
+        "(status, schema, filename, timings) — fetch `/{job_id}/result` for the data."
+    ),
+)
+async def list_jobs(
+    limit: int = Query(default=20, ge=1, le=100, description="Maximum number of jobs."),
+    db: AsyncSession = Depends(get_db),
+) -> list[ExtractionJobSummary]:
+    """Return recent jobs ordered by creation time, newest first.
+
+    The schema relationship is eager-loaded in one extra query (selectinload)
+    so listing N jobs is 2 queries, not N+1.
+    """
+    stmt = (
+        select(ExtractionJob)
+        .options(selectinload(ExtractionJob.schema))
+        .order_by(ExtractionJob.created_at.desc(), ExtractionJob.id.desc())
+        .limit(limit)
+    )
+    jobs = (await db.execute(stmt)).scalars().all()
+    return [
+        ExtractionJobSummary(
+            job_id=job.id,
+            status=job.status,
+            schema_name=job.schema.name,
+            original_filename=job.original_filename,
+            model_used=job.model_used,
+            created_at=job.created_at,
+            completed_at=job.completed_at,
+            processing_time_ms=job.processing_time_ms,
+            retries_used=job.retries_used or 0,
+            validation_passed=job.validation_passed,
+        )
+        for job in jobs
+    ]
+
+
+@router.get(
     "/{job_id}/stream",
     summary="Stream extraction progress (SSE)",
     description=(
@@ -196,4 +247,9 @@ async def get_result(
         processing_time_ms=job.processing_time_ms or 0,
         chunks_processed=job.chunks_processed or 0,
         error_message=job.error_message,
+        validation_errors=list(job.validation_errors or []),
+        evidence={
+            key: FieldEvidence.model_validate(value)
+            for key, value in (job.field_evidence or {}).items()
+        },
     )

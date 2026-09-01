@@ -93,6 +93,10 @@ class ExtractionJob(Base):
     processing_time_ms: Mapped[int | None] = mapped_column(nullable=True)
     chunks_processed: Mapped[int] = mapped_column(default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)  # set on failure
+    # Final validation error list (empty when validation passed) and the per-field
+    # provenance map from verify_grounding — both surfaced by the result endpoint.
+    validation_errors: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    field_evidence: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)  # set on completion
 

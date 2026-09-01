@@ -1,6 +1,7 @@
 import type {
   ErrorResponse,
   ExtractionJobResponse,
+  ExtractionJobSummary,
   ExtractionResult,
   Schema,
   SchemaCreate,
@@ -21,11 +22,18 @@ export const MAX_UPLOAD_MB = 10
 
 /**
  * FastAPI's HTTPException nests structured details under `detail`, so the body
- * is either `{ detail: "msg" }` or `{ detail: { detail: "msg", code } }`.
- * This normalises both into a flat message + optional code.
+ * is either `{ detail: "msg" }` or `{ detail: { detail: "msg", code } }`. A 422
+ * carries `{ detail: [{ msg, loc, … }] }` (one entry per validation failure).
+ * This normalises all three into a flat message + optional code.
  */
 function readJsonError(body: ErrorResponse | { detail?: unknown }): { message: string; code?: string } {
   const detail = (body as { detail?: unknown }).detail
+  if (Array.isArray(detail)) {
+    const messages = (detail as { msg?: unknown }[])
+      .map((d) => (typeof d.msg === 'string' ? d.msg.replace(/^Value error, /, '') : ''))
+      .filter(Boolean)
+    return { message: messages.join('; ') }
+  }
   if (detail && typeof detail === 'object') {
     const inner = detail as ErrorResponse
     return { message: inner.detail, code: inner.code ?? undefined }
@@ -95,6 +103,13 @@ export async function uploadDocument(params: UploadParams): Promise<ExtractionJo
   const res = await fetch(`${BASE}/api/extract`, { method: 'POST', body: form })
   await checkResponse(res)
   return res.json() as Promise<ExtractionJobResponse>
+}
+
+/** Recent jobs, newest first. `limit` is clamped server-side to 1..100. */
+export async function listJobs(limit = 20): Promise<ExtractionJobSummary[]> {
+  const res = await fetch(`${BASE}/api/extract?limit=${limit}`)
+  await checkResponse(res)
+  return res.json() as Promise<ExtractionJobSummary[]>
 }
 
 export async function getResult(jobId: string): Promise<ExtractionResult> {

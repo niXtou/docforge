@@ -4,6 +4,7 @@ import { listSchemas } from '../api/client'
 import { highlightJson } from '../lib/highlightJson'
 import type { Schema } from '../types'
 import { FieldLabel } from './FieldLabel'
+import { SchemaBuilder } from './SchemaBuilder'
 
 interface Props {
   value: Schema | null
@@ -29,6 +30,13 @@ export function SchemaSelector({ value, onChange }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewing, setViewing] = useState<Schema | null>(null)
+  const [creating, setCreating] = useState(false)
+
+  const handleCreated = (schema: Schema) => {
+    setSchemas((prev) => [...prev, schema])
+    onChange(schema)
+    setCreating(false)
+  }
 
   useEffect(() => {
     listSchemas()
@@ -87,10 +95,22 @@ export function SchemaSelector({ value, onChange }: Props) {
             View
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="px-3.5 py-2.5 rounded-md border border-hairline-strong text-sm
+                     text-[var(--color-ink-secondary)] hover:text-[var(--color-ink-primary)]
+                     hover:border-[var(--color-ember-500)]/40 transition-colors duration-150"
+          aria-label="Create a new schema"
+        >
+          New
+        </button>
       </div>
       {value?.description && (
         <p className="text-xs text-[var(--color-ink-tertiary)] leading-relaxed">{value.description}</p>
       )}
+
+      {creating && <SchemaBuilder onClose={() => setCreating(false)} onCreated={handleCreated} />}
 
       {/* Portal-render the modal so ancestor transforms (e.g. .step-enter) don't capture
           its `fixed inset-0` overlay and shrink it to the centered column. */}
