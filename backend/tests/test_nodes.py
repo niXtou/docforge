@@ -275,6 +275,33 @@ async def test_grounding_missing_verdict_keeps_value_unverified(
     assert result["evidence"]["skills[0]"]["method"] == "unverified"
 
 
+async def test_grounding_none_judgment_keeps_values_unverified(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Structured output returning None (unparseable JSON) must not fail the run.
+
+    Regression guard: the old per-value judge tolerated a None verdict; the
+    batched reader must too, treating it as "no verdicts" — values are kept and
+    marked unverified rather than the extraction raising.
+    """
+    chain = MagicMock()
+    chain.ainvoke = AsyncMock(return_value=None)
+    llm = MagicMock()
+    llm.with_structured_output.return_value = chain
+    monkeypatch.setattr("app.workflows.nodes.get_llm", lambda **kwargs: llm)
+
+    state = _state(
+        schema_definition=CV_SCHEMA,
+        raw_content="Resume of Alice Real.",
+        consolidated={"full_name": "A. Real", "skills": ["Rust"]},
+    )
+    result = await verify_grounding(state)
+    assert result["consolidated"] == {"full_name": "A. Real", "skills": ["Rust"]}
+    assert result["grounding_issues"] == []
+    assert result["evidence"]["full_name"]["method"] == "unverified"
+    assert result["evidence"]["skills[0]"]["method"] == "unverified"
+
+
 async def test_grounding_batches_judge_calls(monkeypatch: MonkeyPatch) -> None:
     """Flagged values are split into judge calls of at most grounding_batch_size."""
     prompts: list[str] = []

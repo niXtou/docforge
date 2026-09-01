@@ -449,8 +449,15 @@ def _read_verdicts(judgment: Any) -> dict[int, tuple[bool, str]]:
     Tolerates a partial or malformed response: verdicts without a usable index
     are skipped, and callers treat a missing index as "could not verify".
     """
+    if judgment is None:
+        # Structured output can come back as None when the model fails to produce
+        # parseable JSON. Treat it as "no verdicts": every candidate stays
+        # unverified rather than the whole extraction failing.
+        return {}
     raw_verdicts: Any = (
-        judgment.get("verdicts", []) if isinstance(judgment, dict) else judgment.verdicts
+        judgment.get("verdicts", [])
+        if isinstance(judgment, dict)
+        else getattr(judgment, "verdicts", None) or []
     )
     verdicts: dict[int, tuple[bool, str]] = {}
     for verdict in raw_verdicts:
