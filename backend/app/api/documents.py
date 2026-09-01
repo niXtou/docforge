@@ -14,7 +14,13 @@ from app.api.deps import get_db
 from app.core.config import settings
 from app.core.security import require_demo_access
 from app.models.db import ExtractionJob, ExtractionSchema
-from app.models.schemas import ErrorResponse, ExtractionJobResponse, ExtractionResult, StreamEvent
+from app.models.schemas import (
+    ErrorResponse,
+    ExtractionJobResponse,
+    ExtractionResult,
+    FieldEvidence,
+    StreamEvent,
+)
 from app.services.extraction import create_job, stream_extraction
 
 router = APIRouter()
@@ -196,4 +202,9 @@ async def get_result(
         processing_time_ms=job.processing_time_ms or 0,
         chunks_processed=job.chunks_processed or 0,
         error_message=job.error_message,
+        validation_errors=list(job.validation_errors or []),
+        evidence={
+            key: FieldEvidence.model_validate(value)
+            for key, value in (job.field_evidence or {}).items()
+        },
     )

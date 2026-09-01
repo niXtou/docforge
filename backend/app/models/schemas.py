@@ -19,6 +19,7 @@ is what allows `ExtractionResult.model_validate(job_orm_object)` to work.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -84,6 +85,20 @@ class ExtractionJobResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class FieldEvidence(BaseModel):
+    """Provenance for one extracted value: where in the document it was verified.
+
+    ``method`` says how the value was grounded — found verbatim in the source,
+    accepted by the LLM judge, or not checkable (numbers that were reformatted,
+    or a value the judge returned no verdict for). ``supported`` is False only
+    for values the judge rejected; those are nulled/dropped from ``data``.
+    """
+
+    quote: str = Field(description="Snippet of the document the value was verified against")
+    method: Literal["verbatim", "judge", "unverified"]
+    supported: bool
+
+
 class ExtractionResult(BaseModel):
     """Full extraction result returned after job completion.
 
@@ -100,6 +115,10 @@ class ExtractionResult(BaseModel):
     processing_time_ms: int
     chunks_processed: int
     error_message: str | None = None  # populated when status == "failed"
+    # Errors from the final validation pass; empty when validation passed.
+    validation_errors: list[str] = []
+    # Per-field provenance keyed by field name, or "field[idx]" for array items.
+    evidence: dict[str, FieldEvidence] = {}
 
     model_config = {"from_attributes": True}
 
@@ -119,16 +138,24 @@ class StreamEvent(BaseModel):
     through nodes, it emits one StreamEvent per transition.
 
     The `event` field indicates what happened:
-      node_started      — a workflow node began executing
-      node_completed    — a workflow node finished
-      retry             — validation failed; re-running extraction
+      node_completed    — a workflow node finished. `data` always carries
+                          `keys_updated`; some nodes add more:
+                            chunk            → chunks (int)
+                            extract          → chunks (int, chunk extractions)
+                            verify_grounding → issues (list[str]), evidence_count (int)
+                            validate         → errors (list[str]), attempt (int)
+      progress          — fine-grained within-node progress; `data` has
+                          node, completed, total
+      retry             — validation failed and extraction is being re-run.
+                          node="validate"; `data` has attempt (int) and
+                          errors (list[str]) — the feedback fed to the model
       error             — an unrecoverable error occurred
-      done              — the workflow finished (success or failure)
+      done              — the workflow finished; `data` has the final status
     """
 
     event: str = Field(
         ...,
-        description="node_started | node_completed | retry | error | done",
+        description="node_completed | progress | retry | error | done",
     )
     node: str | None = None  # which graph node (parse, chunk, extract, …)
     message: str

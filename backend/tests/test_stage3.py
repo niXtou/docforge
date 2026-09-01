@@ -256,6 +256,77 @@ async def test_stream_emits_node_events(
     assert "done" in body
 
 
+async def test_stream_emits_retry_event_and_persists_errors(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """A failed validate that will retry emits a `retry` event; the final errors are saved."""
+    import json
+    import tempfile
+
+    from tests.conftest import TestSessionLocal
+
+    job_id = str(uuid.uuid4())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+        f.write(b"content")
+        tmp_path = f.name
+
+    job = ExtractionJob(
+        id=job_id,
+        schema_id=seeded_schema.id,
+        status="pending",
+        original_filename="test.txt",
+        file_type=".txt",
+        model_used="google/gemini-3.1-flash-lite",
+        file_path=tmp_path,
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    errors = ["Required field 'field1' is missing or empty"]
+    evidence = {"field1": {"quote": "field1: x", "method": "verbatim", "supported": True}}
+
+    async def _fake_astream(*args: object, **kwargs: object):  # type: ignore[override]
+        yield ("updates", {"chunk": {"chunks": ["a", "b"]}})
+        yield ("updates", {"validate": {"last_validation_errors": errors, "retry_count": 1}})
+        yield ("updates", {"verify_grounding": {"grounding_issues": [], "evidence": evidence}})
+        yield ("updates", {"validate": {"last_validation_errors": [], "retry_count": 1}})
+        yield ("updates", {"finalize": {"final_result": {"field1": "x"}, "status": "completed"}})
+
+    with patch("app.services.extraction.compiled_graph") as mock_graph:
+        mock_graph.astream = _fake_astream
+        with patch("app.services.extraction.AsyncSessionLocal", TestSessionLocal):
+            response = await client.get(f"/api/extract/{job_id}/stream")
+            await asyncio.sleep(0.1)
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line[len("data: ") :])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    by_event = [e["event"] for e in events]
+    assert by_event.count("retry") == 1
+    retry = next(e for e in events if e["event"] == "retry")
+    assert retry["node"] == "validate"
+    assert retry["data"] == {"attempt": 1, "errors": errors}
+    assert retry["message"] == "Attempt 1 failed validation — retrying"
+    # node_completed payloads carry the per-node specifics.
+    chunk = next(e for e in events if e["node"] == "chunk")
+    assert chunk["data"]["chunks"] == 2
+    grounding = next(e for e in events if e["node"] == "verify_grounding")
+    assert grounding["data"]["issues"] == [] and grounding["data"]["evidence_count"] == 1
+    validates = [e for e in events if e["event"] == "node_completed" and e["node"] == "validate"]
+    assert validates[0]["data"]["errors"] == errors and validates[0]["data"]["attempt"] == 1
+    assert validates[1]["data"]["errors"] == []
+
+    result = await client.get(f"/api/extract/{job_id}/result")
+    assert result.status_code == 200
+    body = result.json()
+    assert body["validation_passed"] is True
+    assert body["validation_errors"] == []
+    assert body["evidence"] == evidence
+
+
 async def test_api_key_purged_after_stream(
     client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
 ) -> None:
@@ -355,6 +426,36 @@ async def test_result_completed_job(
     assert body["status"] == "completed"
     assert body["data"] == {"field1": "extracted_value"}
     assert body["validation_passed"] is True
+    assert body["validation_errors"] == []  # column NULL → empty list
+    assert body["evidence"] == {}
+
+
+async def test_result_exposes_validation_errors_and_evidence(
+    client: AsyncClient, seeded_schema: ExtractionSchema, db_session: AsyncSession
+) -> None:
+    """Persisted validation errors and field evidence come back on the result."""
+    job_id = str(uuid.uuid4())
+    job = ExtractionJob(
+        id=job_id,
+        schema_id=seeded_schema.id,
+        status="completed_with_errors",
+        original_filename="done.txt",
+        file_type=".txt",
+        model_used="google/gemini-3.1-flash-lite",
+        result_data={"field1": None},
+        validation_passed=False,
+        validation_errors=["Required field 'field1' is missing or empty"],
+        field_evidence={"field1": {"quote": "", "method": "judge", "supported": False}},
+        completed_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+    db_session.add(job)
+    await db_session.commit()
+
+    response = await client.get(f"/api/extract/{job_id}/result")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["validation_errors"] == ["Required field 'field1' is missing or empty"]
+    assert body["evidence"] == {"field1": {"quote": "", "method": "judge", "supported": False}}
 
 
 async def test_result_pending_job_409(

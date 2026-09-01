@@ -90,6 +90,27 @@ async def create_job(
     return job
 
 
+def _node_event_data(node_name: str, node_output: dict[str, Any]) -> dict[str, object]:
+    """Build the ``data`` payload for a node_completed event.
+
+    Every node reports ``keys_updated``; the nodes that make the self-correcting
+    loop visible add their specifics so the UI can show *what* happened rather
+    than just *that* something happened.
+    """
+    data: dict[str, object] = {"keys_updated": list(node_output.keys())}
+    if node_name == "chunk":
+        data["chunks"] = len(node_output.get("chunks", []))
+    elif node_name == "extract":
+        data["chunks"] = len(node_output.get("chunk_extractions", []))
+    elif node_name == "verify_grounding":
+        data["issues"] = list(node_output.get("grounding_issues", []))
+        data["evidence_count"] = len(node_output.get("evidence", {}))
+    elif node_name == "validate":
+        data["errors"] = list(node_output.get("last_validation_errors", []))
+        data["attempt"] = int(node_output.get("retry_count", 0))
+    return data
+
+
 async def _run_extraction_task(
     job_id: str,
     state: WorkflowState,
@@ -133,7 +154,8 @@ async def _run_extraction_task(
                     continue
 
                 for node_name, node_output in payload.items():
-                    final_state.update(node_output)  # type: ignore[arg-type]
+                    output = cast("dict[str, Any]", node_output)
+                    final_state.update(output)
                     logger.debug("%s Node '%s' completed", prefix, node_name)
                     await queue.put(
                         StreamEvent(
@@ -141,9 +163,26 @@ async def _run_extraction_task(
                             node=node_name,
                             message=f"Node '{node_name}' completed",
                             timestamp=datetime.now(tz=UTC),
-                            data={"keys_updated": list(node_output.keys())},  # type: ignore[union-attr]
+                            data=_node_event_data(str(node_name), output),
                         )
                     )
+
+                    # Mirror route_after_validate: errors + retries left → the
+                    # graph is about to loop back to extract. Say so explicitly
+                    # so the stream shows the self-correction, not just a
+                    # second 'validate' row.
+                    errors = list(output.get("last_validation_errors", []))
+                    attempt = int(output.get("retry_count", 0))
+                    if node_name == "validate" and errors and attempt <= state.max_retries:
+                        await queue.put(
+                            StreamEvent(
+                                event="retry",
+                                node="validate",
+                                message=f"Attempt {attempt} failed validation — retrying",
+                                timestamp=datetime.now(tz=UTC),
+                                data={"attempt": attempt, "errors": errors},
+                            )
+                        )
 
             elapsed_ms = int((time.monotonic() - time_start) * 1000)
             job = await task_db.get(ExtractionJob, job_id)
@@ -151,6 +190,13 @@ async def _run_extraction_task(
                 job.status = str(final_state.get("status", "completed"))
                 job.result_data = final_state.get("final_result")  # type: ignore[assignment]
                 job.validation_passed = not bool(final_state.get("last_validation_errors"))
+                job.validation_errors = [
+                    str(e)
+                    for e in cast("list[object]", final_state.get("last_validation_errors", []))
+                ]
+                job.field_evidence = cast(
+                    "dict[str, object] | None", final_state.get("evidence") or None
+                )
                 job.retries_used = int(final_state.get("retry_count", 0))  # type: ignore[arg-type]
                 job.processing_time_ms = elapsed_ms
                 job.chunks_processed = len(list(final_state.get("chunks", [])))  # type: ignore[arg-type]
