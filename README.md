@@ -34,6 +34,8 @@ graph TB
 
 The workflow is a LangGraph state machine. Conditional edges route on Pydantic validation: valid → merge, invalid + retries left → re-extract with errors fed back into the prompt, max retries hit → return what we have.
 
+Between extraction and validation a grounding step checks every value against the source text — first verbatim, then (in batches) with an LLM judge for anything not found literally. Values the judge rejects are dropped and the reason is fed into the retry prompt. Every value that survives carries its evidence: the snippet it was verified against and how (`verbatim`, `judge`, or `unverified`).
+
 ---
 
 ## Stack
@@ -71,10 +73,17 @@ docker compose up --build
 | `GET`  | `/api/schemas` | List extraction schemas |
 | `POST` | `/api/schemas` | Create a custom schema |
 | `POST` | `/api/extract` | Upload a document + start extraction |
+| `GET`  | `/api/extract` | Recent jobs, newest first (`?limit=`, max 100) |
 | `GET`  | `/api/extract/{id}/stream` | SSE stream of node-by-node progress |
 | `GET`  | `/api/extract/{id}/result` | Final structured result |
 
-Full interactive docs at `/docs` (Swagger UI). Demo mode rate-limits at 10 extractions/hour/IP and whitelists a small set of low-cost models. Passing your own key via `X-API-Key` bypasses both.
+Full interactive docs at `/docs` (Swagger UI). Demo mode rate-limits at 10 extractions/hour/IP and whitelists a small set of low-cost models. Passing your own OpenRouter key in the `api_key` multipart form field of `POST /api/extract` bypasses both.
+
+The result carries the extracted `data` plus `validation_errors` (empty when validation passed) and `evidence` — one entry per value (`field`, or `field[i]` for array items) with the `quote` it was verified against, the `method` (`verbatim` / `judge` / `unverified`) and whether it was `supported`.
+
+### What the stream shows
+
+Each `node_completed` event says what the node did, not just that it ran: `chunk`/`extract` report the chunk count, `verify_grounding` reports rejected values and how many got evidence, `validate` reports its errors and the attempt number. When validation fails and the graph is about to loop back, a dedicated `retry` event is emitted with the attempt number and the exact errors being fed back to the model — the self-correcting loop is visible in the log rather than inferred from a second `validate` row.
 
 ---
 
